@@ -471,7 +471,7 @@ def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]]
                        excel_out_file: str,
                        args
                        ) -> None:
-    with (pd.ExcelWriter(excel_out_file, engine='xlsxwriter') as excel_writer):
+    with pd.ExcelWriter(excel_out_file, engine='xlsxwriter') as excel_writer:
         for broker in portfolio:
             for security in portfolio[broker]:
                 if security in metadata_by_security:
