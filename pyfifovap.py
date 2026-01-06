@@ -517,20 +517,22 @@ def collect_vap_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]
     depot_sums_after_tfs = defaultdict(float)
     total_sums_before_tfs = defaultdict(float) 
     total_sums_after_tfs = defaultdict(float) 
+
+    sum_row = {"ISIN": "Summe", "Name": "", "Depot": ""}
+    total_sum_row = {"ISIN": "GESAMTSUMME", "Name": "", "Depot": ""}
+    empty_row = {"ISIN": "", "Name": "", "Depot": ""}
     
     for (isin, name, broker, tfs_percentage) in sorted_keys:
         if last_broker is not None and broker != last_broker:
-            sum_row = {"ISIN": "", "Name": f"Summe {last_broker}", "Depot": last_broker}
             for year in all_years:
                 sum_row[f"{year} vor TFS"] = depot_sums_before_tfs.get((last_broker, year), 0.0)
                 sum_row[f"{year} nach TFS"] = depot_sums_after_tfs.get((last_broker, year), 0.0)
             rows.append(sum_row)
             
-            empty_row_afte_depot = {"ISIN": "", "Name": "", "Depot": ""}
             for year in all_years:
-                empty_row_afte_depot[f"{year} vor TFS"] = ""
-                empty_row_afte_depot[f"{year} nach TFS"] = ""
-            rows.append(empty_row_afte_depot)
+                empty_row[f"{year} vor TFS"] = ""
+                empty_row[f"{year} nach TFS"] = ""
+            rows.append(empty_row)
             
             depot_sums_before_tfs.clear()
             depot_sums_after_tfs.clear()
@@ -554,19 +556,19 @@ def collect_vap_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]
         last_broker = broker
     
     if last_broker is not None:
-        sum_row = {"ISIN": "", "Name": f"Summe {last_broker}", "Depot": last_broker}
+        
         for year in all_years:
             sum_row[f"{year} vor TFS"] = depot_sums_before_tfs.get((last_broker, year), 0.0)
             sum_row[f"{year} nach TFS"] = depot_sums_after_tfs.get((last_broker, year), 0.0)
         rows.append(sum_row)
     
-    empty_row = {"ISIN": "", "Name": "", "Depot": ""}
+   
     for year in all_years:
         empty_row[f"{year} vor TFS"] = ""
         empty_row[f"{year} nach TFS"] = ""
     rows.append(empty_row)
     
-    total_sum_row = {"ISIN": "", "Name": "GESAMTSUMME", "Depot": ""}
+    
     for year in all_years:
         total_sum_row[f"{year} vor TFS"] = total_sums_before_tfs.get(year, 0.0)
         total_sum_row[f"{year} nach TFS"] = total_sums_after_tfs.get(year, 0.0)
