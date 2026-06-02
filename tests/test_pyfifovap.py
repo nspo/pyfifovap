@@ -1,5 +1,7 @@
 from pyfifovap import *
 import dataclasses
+import datetime
+import math
 
 
 def test_verlustverrechnung():
@@ -34,6 +36,32 @@ def test_gewinnverrechnung():
     assert determine_taxable_gains_to_consider(0,
                                                -42000,
                                                ArgsMock(gewinne_vorhanden=True)) == -42000
+
+
+def test_parse_money_to_eur_foreign_currency(monkeypatch):
+    # flip to True to run without network: stub the Yahoo Finance lookup instead of
+    # hitting the live historical EURUSD rate.
+    offline_test = False
+
+    raw_value = "USD 38,92"
+    i18n_helper = I18nHelper(is_german=True)  # "USD 38,92" uses a comma as decimal sep
+    date = datetime.date(2026, 5, 18)
+    eurusd = 1.161440134  # EURUSD close on 2026-05-18
+
+    if offline_test:
+        class FakeTicker:
+            def __init__(self, ticker):
+                pass
+
+            def history(self, *args, **kwargs):
+                return pd.DataFrame({"Close": [eurusd]})
+
+        monkeypatch.setattr(yfinance, "Ticker", FakeTicker)
+
+    forex_helper = ForexHelper(offline=False)
+    result = parse_money_to_eur(raw_value, i18n_helper, forex_helper, date)
+
+    assert math.isclose(result, 38.92 / eurusd)
 
 
 def test_tax_factor():

@@ -36,7 +36,9 @@ class SecurityLot:
 class ForexHelper:
     def __init__(self, offline: bool = False):
         self.offline = offline
-        self.eur_to_forex_cache: dict[str, float] = {}  # factor from EUR -> forex currency
+        # factor from EUR -> forex currency, keyed by (currency, date); date is a datetime.date
+        # for a historical rate or None for the latest available quote
+        self.eur_to_forex_cache: dict[tuple[str, Optional[datetime.date]], float] = {}
         # tickers which can be multiplied by EUR amount to get foreign currency amount, like EURUSD
         self.tickers_eur_first = {
             "USD": "EURUSD=X"
@@ -46,9 +48,15 @@ class ForexHelper:
             "GBP": "GBPEUR=X"
         }
 
-    def request_factor_eur_to_forex(self, currency: str) -> Optional[float]:
-        if currency in self.eur_to_forex_cache:
-            return self.eur_to_forex_cache[currency]
+    def request_factor_eur_to_forex(self, currency: str,
+                                    date: Optional[datetime.date] = None) -> Optional[float]:
+        # accept datetimes too, but cache/query by date only
+        if isinstance(date, datetime.datetime):
+            date = date.date()
+
+        cache_key = (currency, date)
+        if cache_key in self.eur_to_forex_cache:
+            return self.eur_to_forex_cache[cache_key]
 
         if self.offline:
             # could implement offline forex input later
@@ -63,23 +71,66 @@ class ForexHelper:
         else:
             return None
 
-        logging.info(f"Yahoo Finance Abfrage für Ticker {ticker} wegen Forex-Kurs für EUR zu {currency}")
+        date_str = date.isoformat() if date else "aktuell"
+        logging.info(f"Yahoo Finance Abfrage für Ticker {ticker} wegen Forex-Kurs für EUR zu {currency} "
+                     f"(Datum: {date_str})")
         try:
-            fx_factor = yfinance.Ticker(ticker).history(period='1d')["Close"].iloc[-1]
+            if date is None:
+                history = yfinance.Ticker(ticker).history(period='1d')
+            else:
+                # fetch a window ending at the requested date so we can fall back to the most
+                # recent trading day on or before it (markets are closed on weekends/holidays).
+                # yfinance treats `end` as exclusive, so add a day to include `date` itself.
+                start = date - datetime.timedelta(days=7)
+                end = date + datetime.timedelta(days=1)
+                history = yfinance.Ticker(ticker).history(start=start.isoformat(), end=end.isoformat())
+            if history.empty:
+                logging.warning(f"Keine Forex-Daten für Ticker {ticker} (Datum: {date_str}) gefunden")
+                return None
+            fx_factor = history["Close"].iloc[-1]
             logging.info(f"Faktor (roh): {fx_factor}")
             fx_factor = float(fx_factor) if is_euro_first else 1.0 / float(fx_factor)
         except Exception as e:
             logging.warning(f"Fehler bei Abfrage von Forex-Ticker {ticker}: {e}")
             return None
 
-        logging.info(f"EUR -> {currency}: {fx_factor}")
-        self.eur_to_forex_cache[currency] = fx_factor
+        logging.info(f"EUR -> {currency} (Datum: {date_str}): {fx_factor}")
+        self.eur_to_forex_cache[cache_key] = fx_factor
         return fx_factor
+
+
+def parse_money_to_eur(raw_value: str,
+                       i18n_helper: I18nHelper,
+                       forex_helper: "ForexHelper",
+                       date: Optional[datetime.date] = None) -> float:
+    """Parse a PortfolioPerformance monetary string into EUR.
+
+    Foreign-currency values are exported with a currency prefix (e.g. "USD 38,92").
+    Such values are converted to EUR using the forex rate at `date` (or the latest
+    rate when no date is given). If no conversion factor is available, the raw
+    foreign amount is used unconverted and a warning is logged.
+    """
+    if " " not in raw_value:
+        return i18n_helper.parse_float(raw_value)
+
+    currency, amount_str = raw_value.split(" ", 1)
+    amount = i18n_helper.parse_float(amount_str)
+
+    fx_factor_eur_to_fx = forex_helper.request_factor_eur_to_forex(currency, date)
+    if fx_factor_eur_to_fx:
+        # factor is FX per 1 EUR, so EUR amount = foreign amount / factor
+        return amount / fx_factor_eur_to_fx
+
+    logging.error(f"Kein Forex-Faktor für {currency} (Datum: {date.isoformat() if date else 'aktuell'}) "
+                    f"gefunden - Betrag '{raw_value}' wird unkonvertiert als EUR behandelt, die Berechnung "
+                    f"für dieses Wertpapier ist dadurch wahrscheinlich falsch!")
+    return amount
 
 
 def handle_portfolio_purchase(portfolio: defaultdict[str, defaultdict[str, SortedList]],
                               row,
-                              i18n_helper: I18nHelper) -> None:
+                              i18n_helper: I18nHelper,
+                              forex_helper: "ForexHelper") -> None:
     pp_names = i18n_helper.get_pp_names()
     assert (row[pp_names.TYPE] in (pp_names.TYPE_BUY, pp_names.TYPE_DELIVERY_INBOUND))
 
@@ -88,12 +139,14 @@ def handle_portfolio_purchase(portfolio: defaultdict[str, defaultdict[str, Sorte
     account_name = row[pp_names.CASH_ACCOUNT]
     maybe_warn_about_long_account_names(account_name)
     account = portfolio[account_name][security_name]
-    purchased_value = i18n_helper.parse_float(row[pp_names.NET_TRANSACTION_VALUE])
+    purchased_date = datetime.datetime.fromisoformat(row[pp_names.DATE])
+    purchased_value = parse_money_to_eur(row[pp_names.NET_TRANSACTION_VALUE],
+                                         i18n_helper, forex_helper, purchased_date)
 
     lot = SecurityLot(
         security_isin=row[pp_names.ISIN] if pp_names.ISIN in row.index else "",
         security_name=security_name,
-        purchased_date=datetime.datetime.fromisoformat(row[pp_names.DATE]),
+        purchased_date=purchased_date,
         purchased_index=row["Index"],
         purchased_shares=num_shares,
         purchased_value=purchased_value,
@@ -206,7 +259,8 @@ def maybe_warn_about_long_account_names(account_name: str) -> None:
 
 
 def read_transactions_into_portfolio(transactions_file: str,
-                                     i18n_helper: I18nHelper) -> defaultdict[str, defaultdict[str, SortedList]]:
+                                     i18n_helper: I18nHelper,
+                                     forex_helper: ForexHelper) -> defaultdict[str, defaultdict[str, SortedList]]:
     data = pd.read_csv(transactions_file, keep_default_na=False, sep=i18n_helper.get_pp_csv_separator())
 
     pp_names = i18n_helper.get_pp_names()
@@ -227,7 +281,7 @@ def read_transactions_into_portfolio(transactions_file: str,
         logging.debug("Verarbeite Zeile:")
         logging.debug(pformat(row))
         if row[pp_names.TYPE] in (pp_names.TYPE_BUY, pp_names.TYPE_DELIVERY_INBOUND):
-            handle_portfolio_purchase(portfolio, row, i18n_helper)
+            handle_portfolio_purchase(portfolio, row, i18n_helper, forex_helper)
         elif row[pp_names.TYPE] == pp_names.TYPE_TRANSFER_OUTBOUND:
             handle_portfolio_transfer_outbound(portfolio, row, i18n_helper)
         elif row[pp_names.TYPE] == pp_names.TYPE_SELL:
@@ -245,8 +299,8 @@ class ETFMetadata:
 
 
 def read_etf_metadata(metadata_file: str, i18n_helper: I18nHelper,
-                      securities_file: str = None,
-                      forex_helper: ForexHelper = None) -> dict[str, ETFMetadata]:
+                      forex_helper: ForexHelper,
+                      securities_file: str = None) -> dict[str, ETFMetadata]:
     pp_names = i18n_helper.get_pp_names()
     custom_names = i18n_helper.get_custom_csv_names()
     data = pd.read_csv(metadata_file, keep_default_na=False)
@@ -275,7 +329,7 @@ def read_etf_metadata(metadata_file: str, i18n_helper: I18nHelper,
             if " " in security_latest_quote:
                 # foreign currency... well, let's try
                 other_curr = security_latest_quote.split(" ")[0]
-                fx_factor_eur_to_fx = forex_helper.request_factor_eur_to_forex(other_curr) if forex_helper else None
+                fx_factor_eur_to_fx = forex_helper.request_factor_eur_to_forex(other_curr)
                 if fx_factor_eur_to_fx:
                     logging.debug(f"Wende Forex-Faktor {fx_factor_eur_to_fx} für {other_curr} an...")
                     security_latest_quote = i18n_helper.parse_float(

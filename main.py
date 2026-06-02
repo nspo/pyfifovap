@@ -102,10 +102,10 @@ def main():
     setup_logging(args.verbose)
 
     i18n_helper = determine_language_from_transactions_file(args.buchungen)
-    portfolio = read_transactions_into_portfolio(args.buchungen, i18n_helper)
-    print_portfolio_summary(portfolio)
-
     forex_helper = ForexHelper(offline=args.offline)
+
+    portfolio = read_transactions_into_portfolio(args.buchungen, i18n_helper, forex_helper)
+    print_portfolio_summary(portfolio)
 
     logging.info(f"Lese Metadaten aus {args.metadaten}...")
     if args.wertpapiere:
@@ -115,8 +115,8 @@ def main():
                         "Aus diesem Grund kann für Wertpapiere kein Gewinn berechnet werden, nur der "
                         "steuerliche Anschaffungspreis.")
     metadata_by_security = read_etf_metadata(args.metadaten, i18n_helper,
-                                             args.wertpapiere,
-                                             forex_helper)
+                                             forex_helper,
+                                             args.wertpapiere)
     logging.info(pformat(metadata_by_security, width=120))
 
     logging.info(f"Lese VAP-Daten aus {args.vap}...")
