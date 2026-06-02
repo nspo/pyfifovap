@@ -1,5 +1,6 @@
 import dataclasses
 import datetime
+import itertools
 from collections import defaultdict
 from pprint import pprint, pformat
 from typing import Optional
@@ -519,6 +520,83 @@ def determine_tax_factor_and_header(args) -> tuple[float, str]:
     return final_tax_factor, kest_header
 
 
+def collect_vap_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]],
+                       metadata_by_security: dict[str, ETFMetadata],
+                       vap_by_security_and_year: defaultdict[str, defaultdict[int, float]]) -> pd.DataFrame:
+    """
+    Summe der Vorabpauschalen (vor und nach TFS) je Depot, ISIN und Jahr als DataFrame.
+
+    Spalten: ISIN, Name, Depot und je Jahr "<Jahr> vor TFS" und "<Jahr> nach TFS".
+    Pro Depot folgt auf die Wertpapierzeilen eine "Summe"-Zeile; abschließend eine
+    "GESAMTSUMME"-Zeile über alle Depots.
+    """
+    # Structure: vap_summary[(isin, name, broker, tfs_percentage)][year] = vap_amount_before_tfs
+    vap_summary = defaultdict(lambda: defaultdict(float))
+
+    for broker in portfolio:
+        for security in portfolio[broker]:
+            if security in metadata_by_security:
+                isin = metadata_by_security[security].isin
+                tfs_percentage = metadata_by_security[security].tfs_percentage
+            else:
+                lots = portfolio[broker][security]
+                if lots and lots[0].security_isin:
+                    isin = lots[0].security_isin
+                else:
+                    isin = ""
+                tfs_percentage = 0
+
+            if not isin:
+                continue
+
+            key = (isin, security, broker, tfs_percentage)
+
+            for lot in portfolio[broker][security]:
+                vap_list = determine_vap_list(security, vap_by_security_and_year, lot)
+                for year, vap_per_share_before_tfs in vap_list:
+                    logging.debug(f"ISIN: {isin}, Depot: {broker}, Jahr: {year}, VAP pro Anteil (vor TFS): {vap_per_share_before_tfs} lot.unsold_shares: {lot.unsold_shares}")
+                    total_vap = vap_per_share_before_tfs * lot.unsold_shares
+                    logging.debug(f"ISIN: {isin}, Depot: {broker}, Jahr: {year}, VAP gesamt (vor TFS): {total_vap}")
+                    vap_summary[key][year] += total_vap
+
+    if not vap_summary:
+        return pd.DataFrame()
+
+    all_years = sorted({year for per_year in vap_summary.values() for year in per_year})
+
+    def make_row(isin, name, broker, before, after, blank=False):
+        row = {"ISIN": isin, "Name": name, "Depot": broker}
+        for year in all_years:
+            row[f"{year} vor TFS"] = "" if blank else before.get(year, 0.0)
+            row[f"{year} nach TFS"] = "" if blank else after.get(year, 0.0)
+        row["Summe vor TFS"] = "" if blank else sum(before.get(year, 0.0) for year in all_years)
+        row["Summe nach TFS"] = "" if blank else sum(after.get(year, 0.0) for year in all_years)
+        return row
+
+    rows = []
+    total_vap_before, total_vap_after = defaultdict(float), defaultdict(float)
+    sorted_keys = sorted(vap_summary, key=lambda k: (k[2], k[0], k[1]))  # broker, isin, name
+
+    for broker, group in itertools.groupby(sorted_keys, key=lambda k: k[2]):
+        broker_vap_before, broker_vap_after = defaultdict(float), defaultdict(float)
+        for isin, name, _broker, tfs_percentage in group:
+            security_vap_before = vap_summary[(isin, name, broker, tfs_percentage)]
+            security_vap_after = {year: amount * (1 - tfs_percentage / 100.0)
+                                  for year, amount in security_vap_before.items()}
+            rows.append(make_row(isin, name, broker, security_vap_before, security_vap_after))
+            for year in all_years:
+                broker_vap_before[year] += security_vap_before.get(year, 0.0)
+                broker_vap_after[year] += security_vap_after.get(year, 0.0)
+                total_vap_before[year] += security_vap_before.get(year, 0.0)
+                total_vap_after[year] += security_vap_after.get(year, 0.0)
+        rows.append(make_row("Summe", "", "", broker_vap_before, broker_vap_after))
+        rows.append(make_row("", "", "", {}, {}, blank=True))
+
+    rows.append(make_row("GESAMTSUMME", "", "", total_vap_before, total_vap_after))
+
+    return pd.DataFrame(rows)
+
+
 def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]],
                        metadata_by_security: dict[str, ETFMetadata],
                        vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
@@ -526,6 +604,13 @@ def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]]
                        args
                        ) -> None:
     with pd.ExcelWriter(excel_out_file, engine='xlsxwriter') as excel_writer:
+        vap_summary_df = collect_vap_summary(portfolio, metadata_by_security, vap_by_security_and_year)
+        if not vap_summary_df.empty:
+            vap_summary_df.to_excel(excel_writer, sheet_name="VAP", index=False)
+            column_indices_money = set(range(3, len(vap_summary_df.columns)))
+            adjust_styling_in_sheet(excel_writer, "VAP", vap_summary_df,
+                                   column_indices_money, set(), set())
+
         for broker in portfolio:
             for security in portfolio[broker]:
                 if security in metadata_by_security:
