@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 
 import sys
+from pprint import pformat
 
-from pyfifovap import *
+from pyfifovap import (
+    ForexHelper,
+    build_results_file,
+    determine_language_from_transactions_file,
+    print_portfolio_summary,
+    read_etf_metadata,
+    read_transactions_into_portfolio,
+    read_vap,
+)
 
 import argparse
 import logging
