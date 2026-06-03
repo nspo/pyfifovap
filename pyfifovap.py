@@ -2,12 +2,12 @@ import dataclasses
 import datetime
 import itertools
 from collections import defaultdict
-from pprint import pprint, pformat
+from pprint import pformat
 from typing import Optional
 
 from sortedcontainers import SortedList
 
-from i18n_helper import *
+from i18n_helper import I18nHelper
 
 import pandas as pd
 import yfinance
@@ -299,9 +299,9 @@ def read_transactions_into_portfolio(
     if pp_names.ISIN not in data.columns:
         # not optimal, but currently not used for matching
         warn_msg = (
-            f"In der Transaktionsliste wurde keine ISIN-Spalte gefunden. Es ist empfohlen, "
-            f"beim Export die Spalte ISIN zu aktivieren. Aktuell wird jedoch primär der Name "
-            f"von Wertpapieren für die Zuordnung genutzt."
+            "In der Transaktionsliste wurde keine ISIN-Spalte gefunden. Es ist empfohlen, "
+            "beim Export die Spalte ISIN zu aktivieren. Aktuell wird jedoch primär der Name "
+            "von Wertpapieren für die Zuordnung genutzt."
         )
         logging.info(warn_msg)
 
@@ -741,7 +741,7 @@ def build_results_file(
                             column_index += 1
                         total_vap_per_share_before_tfs += vap_per_share_before_tfs
                     if total_vap_per_share_before_tfs > 0:
-                        lot_dict[f"Summe VAP vor TFS pro Anteil"] = (
+                        lot_dict["Summe VAP vor TFS pro Anteil"] = (
                             total_vap_per_share_before_tfs
                         )
                         if first_lot:
@@ -751,7 +751,7 @@ def build_results_file(
                             total_vap_per_share_before_tfs
                             + lot.purchased_value / lot.purchased_shares
                         )
-                        lot_dict[f"Anschaffungspreis inkl. VAP pro Anteil"] = (
+                        lot_dict["Anschaffungspreis inkl. VAP pro Anteil"] = (
                             acquisition_price_per_share
                         )
                         if first_lot:

@@ -29,6 +29,13 @@ jobs:
             exit 1
           }
 
+      - name: Lint (ruff check)
+        run: |
+          ruff check || {
+            echo "::error::Lint errors found. Run 'ruff check --fix' locally (review changes) and commit the result."
+            exit 1
+          }
+
       - name: Run tests
         run: |
           PYTHONPATH=. pytest
