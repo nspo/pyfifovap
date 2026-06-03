@@ -6,11 +6,13 @@ through the same code path as the CLI.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from pyfifovap import (
     ForexHelper,
+    collect_overview_summary,
     collect_vap_summary,
     determine_language_from_transactions_file,
     read_etf_metadata,
@@ -132,3 +134,57 @@ def test_vap_summary():
     assert (total["Summe vor TFS"], total["Summe nach TFS"]) == pytest.approx(
         (470.84999652500005, 329.5949975675)
     )
+
+
+def test_overview_summary():
+    args = SimpleNamespace(gewinne_vorhanden=False, kirche_8=False, kirche_9=False)
+    i18n_helper = determine_language_from_transactions_file(TRANSACTIONS_CSV)
+    forex_helper = ForexHelper(offline=True)
+    metadata_by_isin, name_to_isin = read_etf_metadata(
+        METADATA_CSV, i18n_helper, forex_helper, SECURITIES_CSV
+    )
+    portfolio = read_transactions_into_portfolio(
+        TRANSACTIONS_CSV, i18n_helper, forex_helper, name_to_isin
+    )
+    vap_by_isin_and_year = read_vap(VAP_CSV, i18n_helper)
+    df = collect_overview_summary(
+        portfolio, metadata_by_isin, vap_by_isin_and_year, args
+    )
+
+    # --- Correctness check: Infineon (DE0006231004) in Hauptdepot ---
+    # A single lot of 10 shares, cost 352.40 EUR total (35.24/share), no VAP, no TFS,
+    # current quote 86.01 EUR. The KESt+Soli factor is 0.25 * 1.055 = 0.26375; with a
+    # single positive-gain lot the tax is simply the gain times that factor.
+    brutto = 10 * 86.01
+    gewinn = (86.01 - 352.40 / 10) * 10
+    steuer = gewinn * 0.25 * 1.055
+    infineon = df[(df["ISIN"] == "DE0006231004") & (df["Depot"] == "Hauptdepot")].iloc[
+        0
+    ]
+    assert infineon["Brutto-Wert"] == pytest.approx(brutto)
+    assert infineon["KESt-pflichtiger Gewinn"] == pytest.approx(gewinn)
+    assert infineon["KESt + Soli"] == pytest.approx(steuer)
+    assert infineon["Netto-Wert"] == pytest.approx(brutto - steuer)
+    assert infineon["Steueranteil an Brutto-Auszahlung"] == pytest.approx(
+        steuer / brutto
+    )
+
+    # --- Apple Inc. (US0378331005) in Hauptdepot: gain summed over its lots ---
+    apple = df[(df["ISIN"] == "US0378331005") & (df["Depot"] == "Hauptdepot")].iloc[0]
+    assert apple["KESt-pflichtiger Gewinn"] == pytest.approx(3285.50, abs=0.01)
+
+    # Berkshire is quoted in USD and cannot be converted offline -> not in the overview.
+    assert df[df["ISIN"] == "US0846707026"].empty
+
+    # --- GESAMTSUMME: internal consistency + regression guard ---
+    total = df[df["ISIN"] == "GESAMTSUMME"].iloc[0]
+    assert total["Netto-Wert"] == pytest.approx(
+        total["Brutto-Wert"] - total["KESt + Soli"]
+    )
+    assert total["Steueranteil an Brutto-Auszahlung"] == pytest.approx(
+        total["KESt + Soli"] / total["Brutto-Wert"]
+    )
+    assert total["Brutto-Wert"] == pytest.approx(51785.15)
+    assert total["KESt-pflichtiger Gewinn"] == pytest.approx(16739.28166269703)
+    assert total["KESt + Soli"] == pytest.approx(4414.985538536341)
+    assert total["Netto-Wert"] == pytest.approx(47370.16446146367)
