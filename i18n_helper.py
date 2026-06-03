@@ -8,6 +8,7 @@ class PortfolioPerformanceExportNames:
     DATE: str
     TYPE: str
     TYPE_DELIVERY_INBOUND: str
+    TYPE_DELIVERY_OUTBOUND: str
     TYPE_TRANSFER_OUTBOUND: str
     TYPE_SELL: str
     SHARES: str
@@ -44,6 +45,7 @@ class I18nHelper:
                 DATE="Datum",
                 TYPE="Typ",
                 TYPE_DELIVERY_INBOUND="Einlieferung",
+                TYPE_DELIVERY_OUTBOUND="Auslieferung",
                 TYPE_TRANSFER_OUTBOUND="Umbuchung (Ausgang)",
                 TYPE_SELL="Verkauf",
                 SHARES="Stück",
@@ -60,6 +62,7 @@ class I18nHelper:
                 DATE="Date",
                 TYPE="Type",
                 TYPE_DELIVERY_INBOUND="Delivery (Inbound)",
+                TYPE_DELIVERY_OUTBOUND="Delivery (Outbound)",
                 TYPE_TRANSFER_OUTBOUND="Transfer (Outbound)",
                 TYPE_SELL="Sell",
                 SHARES="Shares",

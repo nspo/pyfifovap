@@ -227,24 +227,27 @@ def handle_portfolio_transfer_outbound(
         logging.debug(row)
 
 
-def handle_portfolio_sale(
+def remove_shares_fifo(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    account_name: str,
+    security_name: str,
+    num_shares: float,
     row,
-    i18n_helper: I18nHelper,
+    operation_label: str,
 ) -> None:
-    pp_names = i18n_helper.get_pp_names()
-    assert row[pp_names.TYPE] == pp_names.TYPE_SELL
+    """Remove shares of a security from an account, oldest lots first (FIFO).
 
-    # mark all necessary lots as sold
-    num_shares = i18n_helper.parse_float(row[pp_names.SHARES])
-    account_name = row[pp_names.CASH_ACCOUNT]
-    security_name = row[pp_names.SECURITY]
+    Used for both sales and outbound deliveries - in either case the shares
+    simply leave the account (there is no destination). `operation_label` is the
+    German operation noun used in the log messages (e.g. "Verkauf",
+    "Auslieferung").
+    """
     account = portfolio[account_name][security_name]
     while num_shares > 1e-5:
         if not account:
             logging.error(pformat(row))
             logging.error(
-                f"Verkauf des Wertpapiers {security_name} von {account_name}: "
+                f"{operation_label} des Wertpapiers {security_name} von {account_name}: "
                 f"Nicht genügend an der Quelle vorhanden - Daten inkonsistent "
                 f"oder Logikfehler im Programm. Empfehlung: Meldung des Problems an Entwickler "
                 f"und Transaktionen des Wertpapiers manuell aus der Input-Transaktionsliste "
@@ -258,19 +261,59 @@ def handle_portfolio_sale(
             account.pop(0)
             if not account:
                 # remove entry for this security
-                portfolio[row[pp_names.CASH_ACCOUNT]].pop(row[pp_names.SECURITY])
+                portfolio[account_name].pop(security_name)
             num_shares -= available_shares
         else:
-            # mark partial lot as sold
+            # remove part of the lot
             account[0].unsold_shares -= num_shares
             num_shares = 0
 
     if num_shares > 1e-7:
         logging.warning(
-            f"Bei Verkaufs-Berechnung von {security_name} sind "
+            f"Bei {operation_label}s-Berechnung von {security_name} sind "
             f"noch {num_shares} Anteile eigentlich benötigt, die ignoriert werden (Float-Problem)"
         )
         logging.debug(row)
+
+
+def handle_portfolio_sale(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    row,
+    i18n_helper: I18nHelper,
+) -> None:
+    pp_names = i18n_helper.get_pp_names()
+    assert row[pp_names.TYPE] == pp_names.TYPE_SELL
+
+    num_shares = i18n_helper.parse_float(row[pp_names.SHARES])
+    remove_shares_fifo(
+        portfolio,
+        row[pp_names.CASH_ACCOUNT],
+        row[pp_names.SECURITY],
+        num_shares,
+        row,
+        "Verkauf",
+    )
+
+
+def handle_portfolio_delivery_outbound(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    row,
+    i18n_helper: I18nHelper,
+) -> None:
+    pp_names = i18n_helper.get_pp_names()
+    assert row[pp_names.TYPE] == pp_names.TYPE_DELIVERY_OUTBOUND
+
+    # an outbound delivery removes the shares from the account (e.g. transfer to an
+    # untracked/external account), so they leave the FIFO tracking like a sale.
+    num_shares = i18n_helper.parse_float(row[pp_names.SHARES])
+    remove_shares_fifo(
+        portfolio,
+        row[pp_names.CASH_ACCOUNT],
+        row[pp_names.SECURITY],
+        num_shares,
+        row,
+        "Auslieferung",
+    )
 
 
 def maybe_warn_about_long_account_names(account_name: str) -> None:
@@ -319,6 +362,8 @@ def read_transactions_into_portfolio(
             handle_portfolio_transfer_outbound(portfolio, row, i18n_helper)
         elif row[pp_names.TYPE] == pp_names.TYPE_SELL:
             handle_portfolio_sale(portfolio, row, i18n_helper)
+        elif row[pp_names.TYPE] == pp_names.TYPE_DELIVERY_OUTBOUND:
+            handle_portfolio_delivery_outbound(portfolio, row, i18n_helper)
 
     return portfolio
 
