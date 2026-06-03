@@ -39,13 +39,20 @@ Für solche Anwendungsfälle muss also logischerweise der KESt-pflichtige Gewinn
 
 ## Beispiel-Ergebnis
 
-pyfifovap erzeugt eine große XLSX-Datei mit einem Tab je Wertpapier und je
+pyfifovap erzeugt eine große XLSX-Datei mit Übersichten und einem Tab je Wertpapier und je
 Depot ([Beispiel-XLSX](https://github.com/nspo/pyfifovap/raw/refs/heads/master/Beispiele/Ergebnisse.xlsx)).
-Dort sind alle Chargen aufgelistet, die noch nicht (vollständig) verkauft oder zu anderen Depots übertrage wurden.
-Im folgenden ein Beispiel für ETF-Anteile, für die schon in mehreren Jahren eine Vorabpauschale angefallen ist und
+Dort sind alle Chargen berücksichtigt, die noch nicht (vollständig) verkauft oder zu anderen Depots übertragen wurden.
+
+![](docs/uebersicht.png)
+
+*Übersichts-Tab*
+
+Im Folgenden ein Beispiel für ETF-Anteile, für die schon in mehreren Jahren eine Vorabpauschale angefallen ist und
 für die eine Teilfreistellung von 30% gilt:
 
 ![](docs/etf_mit_vap1.png)
+
+*Alle Chargen eines Wertpapiers bei einem Broker*
 
 ![](docs/etf_mit_vap2.png)
 
@@ -135,19 +142,19 @@ IE00B3RBWM25,Vanguard FTSE All-World Dist ETF,2025,0.353446870
 Die hier je Jahr gelistete VAP darf noch nicht durch eine ggf. vorhandene
 Teilfreistellung (TFS) reduziert sein.
 Falls genug Ausschüttungen in einem Kalenderjahr vorhanden waren, ist die VAP ggf. 0 (wie in zwei von drei Jahren
-des genanntenten Dist-ETFs) oder klein (wie in der letzten Zeile).
+des genannten Dist-ETFs) oder klein (wie in der letzten Zeile).
 Sollte für ein Jahr kein Eintrag existieren, gilt die implizite Annahme, dass hierfür keine VAP anfällt.
 
 ### VAP-Einträge bestimmen
 
 Gute Broker sollten eine klare Abrechnung bereitstellen, wie viel Vorabpauschale angefallen ist.
-Im folgenden ein Beispiel der DKB für das Jahr 2024 (VAP 2024, gilt als zugeflossen Anfang Januar 2025):
+Im Folgenden ein Beispiel der DKB für das Jahr 2024 (VAP 2024, gilt als zugeflossen Anfang Januar 2025):
 
 ![](docs/dkb_vap_abrechnung.png)
 
 Es muss darauf geachtet werden, dass die VAP ohne Teilfreistellung (d.h. der höhere Betrag) und
 pro Anteil übertragen wird.
-Beide ist im markierten Feld gegeben ohne weitere Berechnungen.
+Beides ist im markierten Feld gegeben ohne weitere Berechnungen.
 
 Die VAP kann natürlich auch selbst
 manuell [berechnet](https://www.finanztip.de/indexfonds-etf/etf-steuern/vorabpauschale/)
@@ -159,7 +166,7 @@ Es wird bereits eine Datei mit einigen VAP-Werten zur Verfügung gestellt.
 Bei Updates ist wichtig, dass
 
 - die **ISINs** der Wertpapiere korrekt sind (die Zuordnung erfolgt über die ISIN; der Name dient nur der Anzeige)
-- Die englische Schreibweise von Dezimalzahlen (`1.71817`) mit Punkt statt Komma als Dezimaltrenner verwendet wird
+- die englische Schreibweise von Dezimalzahlen (`1.71817`) mit Punkt statt Komma als Dezimaltrenner verwendet wird
 
 ## Teilfreistellung (TFS) von Aktien- und Mischfonds berücksichtigen
 
