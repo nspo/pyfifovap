@@ -58,8 +58,8 @@ def test_gewinnverrechnung():
 
 def test_parse_money_to_eur_foreign_currency(monkeypatch):
     # flip to True to run without network: stub the Yahoo Finance lookup instead of
-    # hitting the live historical EURUSD rate.
-    offline_test = False
+    # hitting the live historical EURUSD rate. May be an issue with rate-limiting by Yahoo.
+    offline_test = True
 
     raw_value = "USD 38,92"
     i18n_helper = I18nHelper(is_german=True)  # "USD 38,92" uses a comma as decimal sep
