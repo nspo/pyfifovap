@@ -1,3 +1,8 @@
+/Beispiele/beispiel.backup*.portfolio
+/Wertpapiere_\(Standard\).csv
+/Alle_Buchungen.csv
+/Ergebnisse.xlsx
+
 .idea/
 
 # Byte-compiled / optimized / DLL files
