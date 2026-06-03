@@ -1,6 +1,6 @@
 Datum;Typ;Wertpapier;Stück;Kurs;Betrag;Gebühren;Steuern;Gesamtpreis;Konto;Gegenkonto;Notiz;Quelle
-2025-12-17 00:00:00;Einlage;;;;18.392,57;;;18.392,57;Nebendepot Cash;;;
-2025-12-17 00:00:00;Einlage;;;;15.305,69;;;15.305,69;Hauptdepot Cash;;;
+2026-06-03 00:00:00;Auslieferung;Apple Inc.;10;270,55;2.705,50;;;2.705,50;Nebendepot;;;
+2026-06-02 00:00:00;Kauf;Apple Inc.;10;270,55;2.705,50;;;2.705,50;Nebendepot;Nebendepot Cash;;
 2025-12-16 00:00:00;Kauf;Apple Inc.;4;232,20;928,80;;;928,80;Hauptdepot;Hauptdepot Cash;;
 2025-12-03 00:00:00;Kauf;Vanguard FTSE All-World Acc ETF;5;144,18;720,90;;;720,90;Hauptdepot;Hauptdepot Cash;;
 2025-10-10 00:00:00;Kauf;Vanguard FTSE All-World Dist ETF;10;137,38;1.373,80;;;1.373,80;Hauptdepot;Hauptdepot Cash;;
