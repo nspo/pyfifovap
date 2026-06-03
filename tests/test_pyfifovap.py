@@ -30,13 +30,15 @@ def test_gewinnverrechnung():
     assert determine_taxable_gains_to_consider(200, -300, ArgsMock()) == -200
     assert determine_taxable_gains_to_consider(0, -300, ArgsMock()) == 0
 
-    assert determine_taxable_gains_to_consider(0,
-                                               -300,
-                                               ArgsMock(gewinne_vorhanden=True)) == -300
+    assert (
+        determine_taxable_gains_to_consider(0, -300, ArgsMock(gewinne_vorhanden=True))
+        == -300
+    )
 
-    assert determine_taxable_gains_to_consider(0,
-                                               -42000,
-                                               ArgsMock(gewinne_vorhanden=True)) == -42000
+    assert (
+        determine_taxable_gains_to_consider(0, -42000, ArgsMock(gewinne_vorhanden=True))
+        == -42000
+    )
 
 
 def test_parse_money_to_eur_foreign_currency(monkeypatch):
@@ -50,6 +52,7 @@ def test_parse_money_to_eur_foreign_currency(monkeypatch):
     eurusd = 1.161440134  # EURUSD close on 2026-05-18
 
     if offline_test:
+
         class FakeTicker:
             def __init__(self, ticker):
                 pass
@@ -77,13 +80,23 @@ def test_collect_vap_summary_per_broker_subtotals():
     vap["ETF B"][2024] = 2.0
 
     def lot(isin, shares):
-        return SecurityLot(security_isin=isin, security_name="x",
-                           purchased_date=datetime.datetime(2020, 1, 1), purchased_index=0,
-                           purchased_shares=shares, purchased_value=0.0, unsold_shares=shares)
+        return SecurityLot(
+            security_isin=isin,
+            security_name="x",
+            purchased_date=datetime.datetime(2020, 1, 1),
+            purchased_index=0,
+            purchased_shares=shares,
+            purchased_value=0.0,
+            unsold_shares=shares,
+        )
 
     portfolio = defaultdict(lambda: defaultdict(SortedList))
-    portfolio["Broker1"]["ETF A"].add(lot("AAA", 10))  # 10 * 1.0 = 10 vor TFS, 30% TFS -> 7 nach TFS
-    portfolio["Broker2"]["ETF B"].add(lot("BBB", 5))   # 5 * 2.0 = 10 vor TFS, 0% TFS -> 10 nach TFS
+    portfolio["Broker1"]["ETF A"].add(
+        lot("AAA", 10)
+    )  # 10 * 1.0 = 10 vor TFS, 30% TFS -> 7 nach TFS
+    portfolio["Broker2"]["ETF B"].add(
+        lot("BBB", 5)
+    )  # 5 * 2.0 = 10 vor TFS, 0% TFS -> 10 nach TFS
 
     df = collect_vap_summary(portfolio, meta, vap)
 
@@ -130,9 +143,15 @@ def test_collect_vap_summary_multi_broker_multi_year():
     vap["ETF C"][2024] = 4.0
 
     def lot(isin, shares):
-        return SecurityLot(security_isin=isin, security_name="x",
-                           purchased_date=datetime.datetime(2020, 1, 1), purchased_index=0,
-                           purchased_shares=shares, purchased_value=0.0, unsold_shares=shares)
+        return SecurityLot(
+            security_isin=isin,
+            security_name="x",
+            purchased_date=datetime.datetime(2020, 1, 1),
+            purchased_index=0,
+            purchased_shares=shares,
+            purchased_value=0.0,
+            unsold_shares=shares,
+        )
 
     portfolio = defaultdict(lambda: defaultdict(SortedList))
     portfolio["Broker1"]["ETF A"].add(lot("AAA", 10))
@@ -170,9 +189,15 @@ def test_collect_vap_summary_multi_broker_multi_year():
 
     # grand total across all brokers
     total = df[df["ISIN"] == "GESAMTSUMME"].iloc[0]
-    assert (total["2023 vor TFS"], total["2023 nach TFS"]) == pytest.approx((14.0, 10.1))
-    assert (total["2024 vor TFS"], total["2024 nach TFS"]) == pytest.approx((44.0, 36.2))
-    assert (total["Summe vor TFS"], total["Summe nach TFS"]) == pytest.approx((58.0, 46.3))
+    assert (total["2023 vor TFS"], total["2023 nach TFS"]) == pytest.approx(
+        (14.0, 10.1)
+    )
+    assert (total["2024 vor TFS"], total["2024 nach TFS"]) == pytest.approx(
+        (44.0, 36.2)
+    )
+    assert (total["Summe vor TFS"], total["Summe nach TFS"]) == pytest.approx(
+        (58.0, 46.3)
+    )
 
 
 def test_tax_factor():
