@@ -182,7 +182,8 @@ Fremdwährungskurs abgefragt wird).
   Pro Wertpapier mit VAP ist ggf. jedes Jahr ein weiterer VAP-Wert hinzuzufügen.
 - Es ist möglich, dass noch nicht alle relevanten Transaktionstypen aus Portfolio Performance unterstützt werden.
   Aktuell werden berücksichtigt: `Kauf`, `Verkauf`, `Umbuchung (Ausgang)` (Nutzung der Details der ursprünglich
-  gekauften Charge - entspricht Depotübertrag), `Einlieferung` (Nutzung der Werte bei der Einlieferung)
+  gekauften Charge - entspricht Depotübertrag), `Einlieferung` (Nutzung der Werte bei der Einlieferung),
+  `Auslieferung` (Entnahme der Anteile aus dem Depot nach FIFO, wie ein Verkauf ohne Erlös)
 
 ## Bug Reports
 
