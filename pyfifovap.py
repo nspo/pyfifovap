@@ -41,16 +41,13 @@ class ForexHelper:
         # for a historical rate or None for the latest available quote
         self.eur_to_forex_cache: dict[tuple[str, Optional[datetime.date]], float] = {}
         # tickers which can be multiplied by EUR amount to get foreign currency amount, like EURUSD
-        self.tickers_eur_first = {
-            "USD": "EURUSD=X"
-        }
+        self.tickers_eur_first = {"USD": "EURUSD=X"}
         # tickers by which an EUR amount needs to be divided to get to the foreign currency amount, like GBPEUR
-        self.tickers_eur_second = {
-            "GBP": "GBPEUR=X"
-        }
+        self.tickers_eur_second = {"GBP": "GBPEUR=X"}
 
-    def request_factor_eur_to_forex(self, currency: str,
-                                    date: Optional[datetime.date] = None) -> Optional[float]:
+    def request_factor_eur_to_forex(
+        self, currency: str, date: Optional[datetime.date] = None
+    ) -> Optional[float]:
         # accept datetimes too, but cache/query by date only
         if isinstance(date, datetime.datetime):
             date = date.date()
@@ -73,20 +70,26 @@ class ForexHelper:
             return None
 
         date_str = date.isoformat() if date else "aktuell"
-        logging.info(f"Yahoo Finance Abfrage für Ticker {ticker} wegen Forex-Kurs für EUR zu {currency} "
-                     f"(Datum: {date_str})")
+        logging.info(
+            f"Yahoo Finance Abfrage für Ticker {ticker} wegen Forex-Kurs für EUR zu {currency} "
+            f"(Datum: {date_str})"
+        )
         try:
             if date is None:
-                history = yfinance.Ticker(ticker).history(period='1d')
+                history = yfinance.Ticker(ticker).history(period="1d")
             else:
                 # fetch a window ending at the requested date so we can fall back to the most
                 # recent trading day on or before it (markets are closed on weekends/holidays).
                 # yfinance treats `end` as exclusive, so add a day to include `date` itself.
                 start = date - datetime.timedelta(days=7)
                 end = date + datetime.timedelta(days=1)
-                history = yfinance.Ticker(ticker).history(start=start.isoformat(), end=end.isoformat())
+                history = yfinance.Ticker(ticker).history(
+                    start=start.isoformat(), end=end.isoformat()
+                )
             if history.empty:
-                logging.warning(f"Keine Forex-Daten für Ticker {ticker} (Datum: {date_str}) gefunden")
+                logging.warning(
+                    f"Keine Forex-Daten für Ticker {ticker} (Datum: {date_str}) gefunden"
+                )
                 return None
             fx_factor = history["Close"].iloc[-1]
             logging.info(f"Faktor (roh): {fx_factor}")
@@ -100,10 +103,12 @@ class ForexHelper:
         return fx_factor
 
 
-def parse_money_to_eur(raw_value: str,
-                       i18n_helper: I18nHelper,
-                       forex_helper: "ForexHelper",
-                       date: Optional[datetime.date] = None) -> float:
+def parse_money_to_eur(
+    raw_value: str,
+    i18n_helper: I18nHelper,
+    forex_helper: "ForexHelper",
+    date: Optional[datetime.date] = None,
+) -> float:
     """Parse a PortfolioPerformance monetary string into EUR.
 
     Foreign-currency values are exported with a currency prefix (e.g. "USD 38,92").
@@ -122,18 +127,22 @@ def parse_money_to_eur(raw_value: str,
         # factor is FX per 1 EUR, so EUR amount = foreign amount / factor
         return amount / fx_factor_eur_to_fx
 
-    logging.error(f"Kein Forex-Faktor für {currency} (Datum: {date.isoformat() if date else 'aktuell'}) "
-                    f"gefunden - Betrag '{raw_value}' wird unkonvertiert als EUR behandelt, die Berechnung "
-                    f"für dieses Wertpapier ist dadurch wahrscheinlich falsch!")
+    logging.error(
+        f"Kein Forex-Faktor für {currency} (Datum: {date.isoformat() if date else 'aktuell'}) "
+        f"gefunden - Betrag '{raw_value}' wird unkonvertiert als EUR behandelt, die Berechnung "
+        f"für dieses Wertpapier ist dadurch wahrscheinlich falsch!"
+    )
     return amount
 
 
-def handle_portfolio_purchase(portfolio: defaultdict[str, defaultdict[str, SortedList]],
-                              row,
-                              i18n_helper: I18nHelper,
-                              forex_helper: "ForexHelper") -> None:
+def handle_portfolio_purchase(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    row,
+    i18n_helper: I18nHelper,
+    forex_helper: "ForexHelper",
+) -> None:
     pp_names = i18n_helper.get_pp_names()
-    assert (row[pp_names.TYPE] in (pp_names.TYPE_BUY, pp_names.TYPE_DELIVERY_INBOUND))
+    assert row[pp_names.TYPE] in (pp_names.TYPE_BUY, pp_names.TYPE_DELIVERY_INBOUND)
 
     num_shares = i18n_helper.parse_float(row[pp_names.SHARES])
     security_name = row[pp_names.SECURITY]
@@ -141,8 +150,9 @@ def handle_portfolio_purchase(portfolio: defaultdict[str, defaultdict[str, Sorte
     maybe_warn_about_long_account_names(account_name)
     account = portfolio[account_name][security_name]
     purchased_date = datetime.datetime.fromisoformat(row[pp_names.DATE])
-    purchased_value = parse_money_to_eur(row[pp_names.NET_TRANSACTION_VALUE],
-                                         i18n_helper, forex_helper, purchased_date)
+    purchased_value = parse_money_to_eur(
+        row[pp_names.NET_TRANSACTION_VALUE], i18n_helper, forex_helper, purchased_date
+    )
 
     lot = SecurityLot(
         security_isin=row[pp_names.ISIN] if pp_names.ISIN in row.index else "",
@@ -152,24 +162,28 @@ def handle_portfolio_purchase(portfolio: defaultdict[str, defaultdict[str, Sorte
         purchased_shares=num_shares,
         purchased_value=purchased_value,
         # currency="n/a",
-        unsold_shares=num_shares
+        unsold_shares=num_shares,
     )
 
     account.add(lot)
 
 
-def handle_portfolio_transfer_outbound(portfolio: defaultdict[str, defaultdict[str, SortedList]],
-                                       row,
-                                       i18n_helper: I18nHelper) -> None:
+def handle_portfolio_transfer_outbound(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    row,
+    i18n_helper: I18nHelper,
+) -> None:
     pp_names = i18n_helper.get_pp_names()
-    assert (row[pp_names.TYPE] == pp_names.TYPE_TRANSFER_OUTBOUND)
+    assert row[pp_names.TYPE] == pp_names.TYPE_TRANSFER_OUTBOUND
 
     account_from_name = row[pp_names.CASH_ACCOUNT]
     account_to_name = row[pp_names.OFFSET_ACCOUNT]
     security_name = row[pp_names.SECURITY]
     if security_name == "":
-        logging.info(f"Transfer von Nicht-Wertpapieren (Cash) von {account_from_name} zu "
-                     f"{account_to_name} - überspringe Eintrag")
+        logging.info(
+            f"Transfer von Nicht-Wertpapieren (Cash) von {account_from_name} zu "
+            f"{account_to_name} - überspringe Eintrag"
+        )
         logging.debug(pformat(row))
         return
     maybe_warn_about_long_account_names(account_to_name)
@@ -179,11 +193,13 @@ def handle_portfolio_transfer_outbound(portfolio: defaultdict[str, defaultdict[s
     while needed_shares > 1e-5:
         if not account_from:
             logging.error(pformat(row))
-            logging.error(f"Übertrag des Wertpapiers {security_name} von {account_from_name} zu "
-                          f"{account_to_name}: Nicht genügend an der Quelle vorhanden - Daten inkonsistent "
-                          f"oder Logikfehler im Programm. Empfehlung: Meldung des Problems an Entwickler "
-                          f"und Transaktionen des Wertpapiers manuell aus der Input-Transaktionsliste "
-                          f"entfernen.")
+            logging.error(
+                f"Übertrag des Wertpapiers {security_name} von {account_from_name} zu "
+                f"{account_to_name}: Nicht genügend an der Quelle vorhanden - Daten inkonsistent "
+                f"oder Logikfehler im Programm. Empfehlung: Meldung des Problems an Entwickler "
+                f"und Transaktionen des Wertpapiers manuell aus der Input-Transaktionsliste "
+                f"entfernen."
+            )
             exit(1)
 
         available_shares = account_from[0].unsold_shares
@@ -204,16 +220,20 @@ def handle_portfolio_transfer_outbound(portfolio: defaultdict[str, defaultdict[s
             needed_shares = 0
 
     if needed_shares > 1e-7:
-        logging.warning(f"Bei Wertpapierübertrag-Berechnung von {security_name} sind "
-                        f"noch {needed_shares} Anteile eigentlich benötigt, die ignoriert werden (Float-Problem)")
+        logging.warning(
+            f"Bei Wertpapierübertrag-Berechnung von {security_name} sind "
+            f"noch {needed_shares} Anteile eigentlich benötigt, die ignoriert werden (Float-Problem)"
+        )
         logging.debug(row)
 
 
-def handle_portfolio_sale(portfolio: defaultdict[str, defaultdict[str, SortedList]],
-                          row,
-                          i18n_helper: I18nHelper) -> None:
+def handle_portfolio_sale(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    row,
+    i18n_helper: I18nHelper,
+) -> None:
     pp_names = i18n_helper.get_pp_names()
-    assert (row[pp_names.TYPE] == pp_names.TYPE_SELL)
+    assert row[pp_names.TYPE] == pp_names.TYPE_SELL
 
     # mark all necessary lots as sold
     num_shares = i18n_helper.parse_float(row[pp_names.SHARES])
@@ -223,11 +243,13 @@ def handle_portfolio_sale(portfolio: defaultdict[str, defaultdict[str, SortedLis
     while num_shares > 1e-5:
         if not account:
             logging.error(pformat(row))
-            logging.error(f"Verkauf des Wertpapiers {security_name} von {account_name}: "
-                          f"Nicht genügend an der Quelle vorhanden - Daten inkonsistent "
-                          f"oder Logikfehler im Programm. Empfehlung: Meldung des Problems an Entwickler "
-                          f"und Transaktionen des Wertpapiers manuell aus der Input-Transaktionsliste "
-                          f"entfernen.")
+            logging.error(
+                f"Verkauf des Wertpapiers {security_name} von {account_name}: "
+                f"Nicht genügend an der Quelle vorhanden - Daten inkonsistent "
+                f"oder Logikfehler im Programm. Empfehlung: Meldung des Problems an Entwickler "
+                f"und Transaktionen des Wertpapiers manuell aus der Input-Transaktionsliste "
+                f"entfernen."
+            )
             exit(1)
 
         available_shares = account[0].unsold_shares
@@ -244,39 +266,49 @@ def handle_portfolio_sale(portfolio: defaultdict[str, defaultdict[str, SortedLis
             num_shares = 0
 
     if num_shares > 1e-7:
-        logging.warning(f"Bei Verkaufs-Berechnung von {security_name} sind "
-                        f"noch {num_shares} Anteile eigentlich benötigt, die ignoriert werden (Float-Problem)")
+        logging.warning(
+            f"Bei Verkaufs-Berechnung von {security_name} sind "
+            f"noch {num_shares} Anteile eigentlich benötigt, die ignoriert werden (Float-Problem)"
+        )
         logging.debug(row)
 
 
 def maybe_warn_about_long_account_names(account_name: str) -> None:
     # warn about long brokerage account names
     if len(account_name) > 17:
-        warn_msg = (f"Das Depot '{account_name}' hat einen langen Namen. Weil die Tabs in der Ergebnis-XLSX-Datei "
-                    f"nur sehr kurze Namen haben dürfen, könnte dies zu verwirrenden Beschriftungen führen.")
+        warn_msg = (
+            f"Das Depot '{account_name}' hat einen langen Namen. Weil die Tabs in der Ergebnis-XLSX-Datei "
+            f"nur sehr kurze Namen haben dürfen, könnte dies zu verwirrenden Beschriftungen führen."
+        )
         if warn_msg not in _warned_messages:
             logging.warning(warn_msg)
             _warned_messages.add(warn_msg)
 
 
-def read_transactions_into_portfolio(transactions_file: str,
-                                     i18n_helper: I18nHelper,
-                                     forex_helper: ForexHelper) -> defaultdict[str, defaultdict[str, SortedList]]:
-    data = pd.read_csv(transactions_file, keep_default_na=False, sep=i18n_helper.get_pp_csv_separator())
+def read_transactions_into_portfolio(
+    transactions_file: str, i18n_helper: I18nHelper, forex_helper: ForexHelper
+) -> defaultdict[str, defaultdict[str, SortedList]]:
+    data = pd.read_csv(
+        transactions_file, keep_default_na=False, sep=i18n_helper.get_pp_csv_separator()
+    )
 
     pp_names = i18n_helper.get_pp_names()
     data["Index"] = data.index
-    data.sort_values(by=[pp_names.DATE, 'Index'], inplace=True)
+    data.sort_values(by=[pp_names.DATE, "Index"], inplace=True)
 
     if pp_names.ISIN not in data.columns:
         # not optimal, but currently not used for matching
-        warn_msg = (f"In der Transaktionsliste wurde keine ISIN-Spalte gefunden. Es ist empfohlen, "
-                    f"beim Export die Spalte ISIN zu aktivieren. Aktuell wird jedoch primär der Name "
-                    f"von Wertpapieren für die Zuordnung genutzt.")
+        warn_msg = (
+            f"In der Transaktionsliste wurde keine ISIN-Spalte gefunden. Es ist empfohlen, "
+            f"beim Export die Spalte ISIN zu aktivieren. Aktuell wird jedoch primär der Name "
+            f"von Wertpapieren für die Zuordnung genutzt."
+        )
         logging.info(warn_msg)
 
     # mapping: broker name -> security name -> SortedList[SecurityLot]
-    portfolio: defaultdict[str, defaultdict[str, SortedList]] = defaultdict(lambda: defaultdict(SortedList))
+    portfolio: defaultdict[str, defaultdict[str, SortedList]] = defaultdict(
+        lambda: defaultdict(SortedList)
+    )
 
     for index, row in data.iterrows():
         logging.debug("Verarbeite Zeile:")
@@ -299,9 +331,12 @@ class ETFMetadata:
     last_quote_eur: Optional[float] = None  # last quote in EUR, if known
 
 
-def read_etf_metadata(metadata_file: str, i18n_helper: I18nHelper,
-                      forex_helper: ForexHelper,
-                      securities_file: str = None) -> dict[str, ETFMetadata]:
+def read_etf_metadata(
+    metadata_file: str,
+    i18n_helper: I18nHelper,
+    forex_helper: ForexHelper,
+    securities_file: str = None,
+) -> dict[str, ETFMetadata]:
     pp_names = i18n_helper.get_pp_names()
     custom_names = i18n_helper.get_custom_csv_names()
     data = pd.read_csv(metadata_file, keep_default_na=False)
@@ -313,14 +348,16 @@ def read_etf_metadata(metadata_file: str, i18n_helper: I18nHelper,
         security_isin = row[custom_names.ISIN]
         security_tfs = int(row[custom_names.PROZENT_TEILFREISTELLUNG])
         metadata_by_security[security_name] = ETFMetadata(
-            name=security_name,
-            isin=security_isin,
-            tfs_percentage=security_tfs
+            name=security_name, isin=security_isin, tfs_percentage=security_tfs
         )
 
     if securities_file:
         # read quotes
-        data = pd.read_csv(securities_file, keep_default_na=False, sep=i18n_helper.get_pp_csv_separator())
+        data = pd.read_csv(
+            securities_file,
+            keep_default_na=False,
+            sep=i18n_helper.get_pp_csv_separator(),
+        )
         for _, row in data.iterrows():
             security_name = row[pp_names.NAME]
             security_isin = row[pp_names.ISIN]
@@ -330,44 +367,59 @@ def read_etf_metadata(metadata_file: str, i18n_helper: I18nHelper,
             if " " in security_latest_quote:
                 # foreign currency... well, let's try
                 other_curr = security_latest_quote.split(" ")[0]
-                fx_factor_eur_to_fx = forex_helper.request_factor_eur_to_forex(other_curr)
+                fx_factor_eur_to_fx = forex_helper.request_factor_eur_to_forex(
+                    other_curr
+                )
                 if fx_factor_eur_to_fx:
-                    logging.debug(f"Wende Forex-Faktor {fx_factor_eur_to_fx} für {other_curr} an...")
-                    security_latest_quote = i18n_helper.parse_float(
-                        security_latest_quote.split(" ")[1]) / fx_factor_eur_to_fx
+                    logging.debug(
+                        f"Wende Forex-Faktor {fx_factor_eur_to_fx} für {other_curr} an..."
+                    )
+                    security_latest_quote = (
+                        i18n_helper.parse_float(security_latest_quote.split(" ")[1])
+                        / fx_factor_eur_to_fx
+                    )
                 else:
                     logging.warning(
-                        f"Kein Forex-Faktor für {other_curr} gefunden, überspringe Kurs für {security_name}")
+                        f"Kein Forex-Faktor für {other_curr} gefunden, überspringe Kurs für {security_name}"
+                    )
                     continue
             else:
                 security_latest_quote = i18n_helper.parse_float(security_latest_quote)
 
             if security_name in metadata_by_security:
-                if metadata_by_security[security_name].isin and security_isin and \
-                        metadata_by_security[security_name].isin != security_isin:
-                    logging.error(f"Inkonsistente ISIN für {security_name} in {metadata_file} "
-                                  f"({metadata_by_security[security_name].isin}) und in {securities_file}"
-                                  f" ({security_isin})")
+                if (
+                    metadata_by_security[security_name].isin
+                    and security_isin
+                    and metadata_by_security[security_name].isin != security_isin
+                ):
+                    logging.error(
+                        f"Inkonsistente ISIN für {security_name} in {metadata_file} "
+                        f"({metadata_by_security[security_name].isin}) und in {securities_file}"
+                        f" ({security_isin})"
+                    )
                     exit(1)
 
                 metadata_by_security[security_name] = dataclasses.replace(
                     metadata_by_security[security_name],
-                    isin=security_isin if security_isin else metadata_by_security[security_name].isin,
-                    last_quote_eur=security_latest_quote
+                    isin=security_isin
+                    if security_isin
+                    else metadata_by_security[security_name].isin,
+                    last_quote_eur=security_latest_quote,
                 )
             else:
                 metadata_by_security[security_name] = ETFMetadata(
                     name=security_name,
                     isin=security_isin,
                     tfs_percentage=0,
-                    last_quote_eur=security_latest_quote
+                    last_quote_eur=security_latest_quote,
                 )
 
     return metadata_by_security
 
 
-def read_vap(vap_file: str,
-             i18n_helper: I18nHelper) -> defaultdict[str, defaultdict[int, float]]:
+def read_vap(
+    vap_file: str, i18n_helper: I18nHelper
+) -> defaultdict[str, defaultdict[int, float]]:
     """
     Beispiel-Ergebnis:
     {
@@ -382,7 +434,9 @@ def read_vap(vap_file: str,
     custom_names = i18n_helper.get_custom_csv_names()
     data = pd.read_csv(vap_file, keep_default_na=False)
 
-    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]] = defaultdict(lambda: defaultdict(float))
+    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]] = defaultdict(
+        lambda: defaultdict(float)
+    )
     for index, row in data.iterrows():
         security_name = row[custom_names.NAME]
         year = int(row[custom_names.JAHR_DES_WERTZUWACHES])
@@ -395,10 +449,11 @@ def read_vap(vap_file: str,
 # returns "VAP vor TFS pro Anteil" for each year as list, if any
 # Beispiel-Ergebnis:
 # [(2023, 0.23), (2024, 0.89)]
-def determine_vap_list(security: str,
-                       vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
-                       lot: SecurityLot
-                       ) -> list[tuple[int, float]]:
+def determine_vap_list(
+    security: str,
+    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
+    lot: SecurityLot,
+) -> list[tuple[int, float]]:
     vap_list_per_share_before_tfs = []
     if security in vap_by_security_and_year:
         for year in vap_by_security_and_year[security]:
@@ -409,12 +464,15 @@ def determine_vap_list(security: str,
             else:
                 if purchased_year == year:
                     # partial vap for each partial month
-                    proportion_of_year = (13 - lot.purchased_date.month) / 12.0  # 12/12 for Jan, 1/12 for Dec
+                    proportion_of_year = (
+                        13 - lot.purchased_date.month
+                    ) / 12.0  # 12/12 for Jan, 1/12 for Dec
                 else:
                     # full year
                     proportion_of_year = 1.0
-                vap_per_share_before_tfs = proportion_of_year * \
-                                           vap_by_security_and_year[security][year]
+                vap_per_share_before_tfs = (
+                    proportion_of_year * vap_by_security_and_year[security][year]
+                )
             if vap_per_share_before_tfs > 0:
                 vap_list_per_share_before_tfs.append((year, vap_per_share_before_tfs))
 
@@ -422,23 +480,21 @@ def determine_vap_list(security: str,
 
 
 # various adjustment to styles in the sheet to make it more readable
-def adjust_styling_in_sheet(excel_writer: pd.ExcelWriter,
-                            sheet_name: str,
-                            df: pd.DataFrame,
-                            column_indices_money: set[int],
-                            column_indices_percent: set[int],
-                            column_indices_narrow: set[int]) -> None:
+def adjust_styling_in_sheet(
+    excel_writer: pd.ExcelWriter,
+    sheet_name: str,
+    df: pd.DataFrame,
+    column_indices_money: set[int],
+    column_indices_percent: set[int],
+    column_indices_narrow: set[int],
+) -> None:
     workbook = excel_writer.book
     worksheet = excel_writer.sheets[sheet_name]
 
-    money_format = workbook.add_format({
-        'text_wrap': True,
-        'num_format': '#,##0.00 [$EUR];-#,##0.00 [$EUR]'
-    })
-    percent_format = workbook.add_format({
-        'text_wrap': True,
-        'num_format': '0.00%'
-    })
+    money_format = workbook.add_format(
+        {"text_wrap": True, "num_format": "#,##0.00 [$EUR];-#,##0.00 [$EUR]"}
+    )
+    percent_format = workbook.add_format({"text_wrap": True, "num_format": "0.00%"})
     # adjust the column widths based on the content
     for i, col in enumerate(df.columns):
         width = max(df[col].apply(lambda x: len(str(x))).max(), len(col))
@@ -453,7 +509,9 @@ def adjust_styling_in_sheet(excel_writer: pd.ExcelWriter,
             worksheet.set_column(i, i, width + 1.5)
 
     # adjust column headers
-    bold_and_wrap = workbook.add_format({'bold': True, 'text_wrap': True, 'valign': 'top'})
+    bold_and_wrap = workbook.add_format(
+        {"bold": True, "text_wrap": True, "valign": "top"}
+    )
 
     for col_num, value in enumerate(df.columns.values):
         worksheet.write(0, col_num, value, bold_and_wrap)
@@ -461,7 +519,9 @@ def adjust_styling_in_sheet(excel_writer: pd.ExcelWriter,
     worksheet.set_row(0, 50)
 
 
-def determine_taxable_gains_to_consider(previous_taxable_gains: float, current_taxable_gain: float, args) -> float:
+def determine_taxable_gains_to_consider(
+    previous_taxable_gains: float, current_taxable_gain: float, args
+) -> float:
     """
     Bestimmte, wie viel der steuerpflichtigen Erträge in der aktuellen Charge für die Steuerberechnung genutzt werden
 
@@ -520,9 +580,11 @@ def determine_tax_factor_and_header(args) -> tuple[float, str]:
     return final_tax_factor, kest_header
 
 
-def collect_vap_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]],
-                       metadata_by_security: dict[str, ETFMetadata],
-                       vap_by_security_and_year: defaultdict[str, defaultdict[int, float]]) -> pd.DataFrame:
+def collect_vap_summary(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    metadata_by_security: dict[str, ETFMetadata],
+    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
+) -> pd.DataFrame:
     """
     Summe der Vorabpauschalen (vor und nach TFS) je Depot, ISIN und Jahr als DataFrame.
 
@@ -554,9 +616,13 @@ def collect_vap_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]
             for lot in portfolio[broker][security]:
                 vap_list = determine_vap_list(security, vap_by_security_and_year, lot)
                 for year, vap_per_share_before_tfs in vap_list:
-                    logging.debug(f"ISIN: {isin}, Depot: {broker}, Jahr: {year}, VAP pro Anteil (vor TFS): {vap_per_share_before_tfs} lot.unsold_shares: {lot.unsold_shares}")
+                    logging.debug(
+                        f"ISIN: {isin}, Depot: {broker}, Jahr: {year}, VAP pro Anteil (vor TFS): {vap_per_share_before_tfs} lot.unsold_shares: {lot.unsold_shares}"
+                    )
                     total_vap = vap_per_share_before_tfs * lot.unsold_shares
-                    logging.debug(f"ISIN: {isin}, Depot: {broker}, Jahr: {year}, VAP gesamt (vor TFS): {total_vap}")
+                    logging.debug(
+                        f"ISIN: {isin}, Depot: {broker}, Jahr: {year}, VAP gesamt (vor TFS): {total_vap}"
+                    )
                     vap_summary[key][year] += total_vap
 
     if not vap_summary:
@@ -569,21 +635,31 @@ def collect_vap_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]
         for year in all_years:
             row[f"{year} vor TFS"] = "" if blank else before.get(year, 0.0)
             row[f"{year} nach TFS"] = "" if blank else after.get(year, 0.0)
-        row["Summe vor TFS"] = "" if blank else sum(before.get(year, 0.0) for year in all_years)
-        row["Summe nach TFS"] = "" if blank else sum(after.get(year, 0.0) for year in all_years)
+        row["Summe vor TFS"] = (
+            "" if blank else sum(before.get(year, 0.0) for year in all_years)
+        )
+        row["Summe nach TFS"] = (
+            "" if blank else sum(after.get(year, 0.0) for year in all_years)
+        )
         return row
 
     rows = []
     total_vap_before, total_vap_after = defaultdict(float), defaultdict(float)
-    sorted_keys = sorted(vap_summary, key=lambda k: (k[2], k[0], k[1]))  # broker, isin, name
+    sorted_keys = sorted(
+        vap_summary, key=lambda k: (k[2], k[0], k[1])
+    )  # broker, isin, name
 
     for broker, group in itertools.groupby(sorted_keys, key=lambda k: k[2]):
         broker_vap_before, broker_vap_after = defaultdict(float), defaultdict(float)
         for isin, name, _broker, tfs_percentage in group:
             security_vap_before = vap_summary[(isin, name, broker, tfs_percentage)]
-            security_vap_after = {year: amount * (1 - tfs_percentage / 100.0)
-                                  for year, amount in security_vap_before.items()}
-            rows.append(make_row(isin, name, broker, security_vap_before, security_vap_after))
+            security_vap_after = {
+                year: amount * (1 - tfs_percentage / 100.0)
+                for year, amount in security_vap_before.items()
+            }
+            rows.append(
+                make_row(isin, name, broker, security_vap_before, security_vap_after)
+            )
             for year in all_years:
                 broker_vap_before[year] += security_vap_before.get(year, 0.0)
                 broker_vap_after[year] += security_vap_after.get(year, 0.0)
@@ -597,19 +673,23 @@ def collect_vap_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]
     return pd.DataFrame(rows)
 
 
-def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]],
-                       metadata_by_security: dict[str, ETFMetadata],
-                       vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
-                       excel_out_file: str,
-                       args
-                       ) -> None:
-    with pd.ExcelWriter(excel_out_file, engine='xlsxwriter') as excel_writer:
-        vap_summary_df = collect_vap_summary(portfolio, metadata_by_security, vap_by_security_and_year)
+def build_results_file(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    metadata_by_security: dict[str, ETFMetadata],
+    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
+    excel_out_file: str,
+    args,
+) -> None:
+    with pd.ExcelWriter(excel_out_file, engine="xlsxwriter") as excel_writer:
+        vap_summary_df = collect_vap_summary(
+            portfolio, metadata_by_security, vap_by_security_and_year
+        )
         if not vap_summary_df.empty:
             vap_summary_df.to_excel(excel_writer, sheet_name="VAP", index=False)
             column_indices_money = set(range(3, len(vap_summary_df.columns)))
-            adjust_styling_in_sheet(excel_writer, "VAP", vap_summary_df,
-                                   column_indices_money, set(), set())
+            adjust_styling_in_sheet(
+                excel_writer, "VAP", vap_summary_df, column_indices_money, set(), set()
+            )
 
         for broker in portfolio:
             for security in portfolio[broker]:
@@ -630,7 +710,9 @@ def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]]
                 for lot in portfolio[broker][security]:
                     column_index = 0  # keep track of the next column index that will be added (for styling purposes)
                     # VAP calculation
-                    vap_list_per_share_before_tfs = determine_vap_list(security, vap_by_security_and_year, lot)
+                    vap_list_per_share_before_tfs = determine_vap_list(
+                        security, vap_by_security_and_year, lot
+                    )
                     if not isin and lot.security_isin:
                         isin = lot.security_isin
 
@@ -641,7 +723,7 @@ def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]]
                         "Anzahl (noch unverkauft)": lot.unsold_shares,
                         "Anzahl (gekauft)": lot.purchased_shares,
                         "Gesamtkosten": lot.purchased_value,
-                        "Kosten pro Anteil": lot.purchased_value / lot.purchased_shares
+                        "Kosten pro Anteil": lot.purchased_value / lot.purchased_shares,
                     }
                     if first_lot:
                         column_indices_narrow.add(3)
@@ -651,61 +733,87 @@ def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]]
                         column_index = 7
                     total_vap_per_share_before_tfs = 0.0
                     for year, vap_per_share_before_tfs in vap_list_per_share_before_tfs:
-                        lot_dict[f"VAP {year} vor TFS pro Anteil"] = vap_per_share_before_tfs
+                        lot_dict[f"VAP {year} vor TFS pro Anteil"] = (
+                            vap_per_share_before_tfs
+                        )
                         if first_lot:
                             column_indices_money.add(column_index)
                             column_index += 1
                         total_vap_per_share_before_tfs += vap_per_share_before_tfs
                     if total_vap_per_share_before_tfs > 0:
-                        lot_dict[f"Summe VAP vor TFS pro Anteil"] = total_vap_per_share_before_tfs
+                        lot_dict[f"Summe VAP vor TFS pro Anteil"] = (
+                            total_vap_per_share_before_tfs
+                        )
                         if first_lot:
                             column_indices_money.add(column_index)
                             column_index += 1
-                        acquisition_price_per_share = total_vap_per_share_before_tfs + lot.purchased_value / lot.purchased_shares
-                        lot_dict[f"Anschaffungspreis inkl. VAP pro Anteil"] = acquisition_price_per_share
+                        acquisition_price_per_share = (
+                            total_vap_per_share_before_tfs
+                            + lot.purchased_value / lot.purchased_shares
+                        )
+                        lot_dict[f"Anschaffungspreis inkl. VAP pro Anteil"] = (
+                            acquisition_price_per_share
+                        )
                         if first_lot:
                             column_indices_money.add(column_index)
                             column_index += 1
                     else:
-                        acquisition_price_per_share = lot.purchased_value / lot.purchased_shares
-                    if security in metadata_by_security and metadata_by_security[security].last_quote_eur:
+                        acquisition_price_per_share = (
+                            lot.purchased_value / lot.purchased_shares
+                        )
+                    if (
+                        security in metadata_by_security
+                        and metadata_by_security[security].last_quote_eur
+                    ):
                         metadata = metadata_by_security[security]
                         # can determine taxable gain as there is a current price known
-                        lot_dict["Brutto-Wert"] = metadata.last_quote_eur * lot.unsold_shares
+                        lot_dict["Brutto-Wert"] = (
+                            metadata.last_quote_eur * lot.unsold_shares
+                        )
                         if first_lot:
                             column_indices_money.add(column_index)
                             column_index += 1
                         taxable_gain_header = "KESt-pflichtiger Gewinn"
-                        taxable_gain = (metadata.last_quote_eur - acquisition_price_per_share) * lot.unsold_shares
+                        taxable_gain = (
+                            metadata.last_quote_eur - acquisition_price_per_share
+                        ) * lot.unsold_shares
                         if total_vap_per_share_before_tfs > 0:
                             taxable_gain_header += " nach VAP"
                         if metadata.tfs_percentage > 0:
                             taxable_gain_header += " nach TFS"
-                            taxable_gain = taxable_gain * (100 - metadata.tfs_percentage) / 100
+                            taxable_gain = (
+                                taxable_gain * (100 - metadata.tfs_percentage) / 100
+                            )
 
                         lot_dict[taxable_gain_header] = taxable_gain
                         if first_lot:
                             column_indices_money.add(column_index)
                             column_index += 1
 
-                        taxable_gains_to_consider = determine_taxable_gains_to_consider(previous_taxable_gains,
-                                                                                        taxable_gain, args)
+                        taxable_gains_to_consider = determine_taxable_gains_to_consider(
+                            previous_taxable_gains, taxable_gain, args
+                        )
                         previous_taxable_gains += taxable_gain
 
-                        final_tax_factor, kest_header = determine_tax_factor_and_header(args)
+                        final_tax_factor, kest_header = determine_tax_factor_and_header(
+                            args
+                        )
                         taxes = taxable_gains_to_consider * final_tax_factor
                         lot_dict[kest_header] = taxes
                         if first_lot:
                             column_indices_money.add(column_index)
                             column_index += 1
 
-                        lot_dict["Netto-Wert"] = metadata.last_quote_eur * lot.unsold_shares - taxes
+                        lot_dict["Netto-Wert"] = (
+                            metadata.last_quote_eur * lot.unsold_shares - taxes
+                        )
                         if first_lot:
                             column_indices_money.add(column_index)
                             column_index += 1
 
                         lot_dict["Steueranteil an Brutto-Auszahlung"] = taxes / (
-                                metadata.last_quote_eur * lot.unsold_shares)
+                            metadata.last_quote_eur * lot.unsold_shares
+                        )
                         if first_lot:
                             column_indices_percent.add(column_index)
                             column_index += 1
@@ -717,11 +825,19 @@ def build_results_file(portfolio: defaultdict[str, defaultdict[str, SortedList]]
                 sheet_name = sheet_name[:31]  # sheet names have a max length
                 df.to_excel(excel_writer, sheet_name=sheet_name, index=False)
 
-                adjust_styling_in_sheet(excel_writer, sheet_name, df,
-                                        column_indices_money, column_indices_percent, column_indices_narrow)
+                adjust_styling_in_sheet(
+                    excel_writer,
+                    sheet_name,
+                    df,
+                    column_indices_money,
+                    column_indices_percent,
+                    column_indices_narrow,
+                )
 
 
-def print_portfolio_summary(portfolio: defaultdict[str, defaultdict[str, SortedList]]) -> None:
+def print_portfolio_summary(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+) -> None:
     for broker in portfolio:
         if not portfolio[broker]:
             continue
@@ -741,6 +857,8 @@ def determine_language_from_transactions_file(transactions_file: str) -> I18nHel
     elif "Date" in first_line:
         return I18nHelper(is_german=False)
     else:
-        logging.error(f"Buchungs-Datei {transactions_file} hat unerwartetes Format. Sie muss in Deutsch oder "
-                      f"Englisch sein.")
+        logging.error(
+            f"Buchungs-Datei {transactions_file} hat unerwartetes Format. Sie muss in Deutsch oder "
+            f"Englisch sein."
+        )
         exit(1)

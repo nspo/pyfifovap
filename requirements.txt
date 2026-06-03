@@ -4,3 +4,4 @@ openpyxl
 xlsxwriter
 yfinance
 pytest
+ruff

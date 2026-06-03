@@ -69,7 +69,6 @@ class I18nHelper:
                 OFFSET_ACCOUNT="Offset Account",
                 NAME="Name",
                 LATEST_QUOTE="Latest",
-
             )
 
     def parse_float(self, s: str, assume_german=False) -> float:
@@ -89,6 +88,6 @@ class I18nHelper:
 
     def get_pp_csv_separator(self) -> str:
         if self.is_german:
-            return ';'
+            return ";"
         else:
-            return ','
+            return ","
