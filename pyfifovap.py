@@ -823,12 +823,120 @@ def collect_vap_summary(
                 broker_vap_after[year] += security_vap_after.get(year, 0.0)
                 total_vap_before[year] += security_vap_before.get(year, 0.0)
                 total_vap_after[year] += security_vap_after.get(year, 0.0)
-        rows.append(make_row("Summe", "", "", broker_vap_before, broker_vap_after))
+        rows.append(make_row("Summe", "", broker, broker_vap_before, broker_vap_after))
         rows.append(make_row("", "", "", {}, {}, blank=True))
 
     rows.append(make_row("GESAMTSUMME", "", "", total_vap_before, total_vap_after))
 
     return pd.DataFrame(rows)
+
+
+def collect_overview_summary(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    metadata_by_isin: dict[str, ETFMetadata],
+    vap_by_isin_and_year: defaultdict[str, defaultdict[int, float]],
+    args,
+) -> pd.DataFrame:
+    """
+    Überblick über Brutto-/Netto-Wert und Steuer je Depot und Wertpapier als DataFrame.
+
+    Gleiche Struktur wie die VAP-Übersicht: je Depot eine Zeile pro Wertpapier, danach
+    eine "Summe"-Zeile und abschließend eine "GESAMTSUMME"-Zeile über alle Depots. Die
+    Werte je Wertpapier sind die Summe über die noch verbliebenen Chargen (inkl.
+    Verlustverrechnung nach FIFO). Nur Wertpapiere mit bekanntem aktuellem Kurs werden
+    berücksichtigt.
+    """
+    final_tax_factor, kest_header = determine_tax_factor_and_header(args)
+
+    # figures[(isin, name, broker)] = {"brutto", "gewinn", "steuer", "netto"}
+    figures = {}
+    for broker in portfolio:
+        for isin in portfolio[broker]:
+            if (
+                isin not in metadata_by_isin
+                or not metadata_by_isin[isin].last_quote_eur
+            ):
+                # without a current quote no value/gain can be determined
+                continue
+            metadata = metadata_by_isin[isin]
+
+            brutto = gewinn = steuer = netto = 0.0
+            previous_taxable_gains = 0.0
+            for lot in portfolio[broker][isin]:
+                vap_list = determine_vap_list(isin, vap_by_isin_and_year, lot)
+                total_vap_per_share = sum(vap for _, vap in vap_list)
+                acquisition_price_per_share = (
+                    total_vap_per_share + lot.purchased_value / lot.purchased_shares
+                )
+                lot_brutto = metadata.last_quote_eur * lot.unsold_shares
+                taxable_gain = (
+                    metadata.last_quote_eur - acquisition_price_per_share
+                ) * lot.unsold_shares
+                if metadata.tfs_percentage > 0:
+                    taxable_gain = taxable_gain * (100 - metadata.tfs_percentage) / 100
+                taxable_gains_to_consider = determine_taxable_gains_to_consider(
+                    previous_taxable_gains, taxable_gain, args
+                )
+                previous_taxable_gains += taxable_gain
+                lot_taxes = taxable_gains_to_consider * final_tax_factor
+
+                brutto += lot_brutto
+                gewinn += taxable_gain
+                steuer += lot_taxes
+                netto += lot_brutto - lot_taxes
+
+            figures[(isin, metadata.name, broker)] = {
+                "brutto": brutto,
+                "gewinn": gewinn,
+                "steuer": steuer,
+                "netto": netto,
+            }
+
+    if not figures:
+        return pd.DataFrame()
+
+    columns = [
+        "ISIN",
+        "Name",
+        "Depot",
+        "Brutto-Wert",
+        "KESt-pflichtiger Gewinn",
+        kest_header,
+        "Netto-Wert",
+        "Steueranteil an Brutto-Auszahlung",
+    ]
+
+    def make_row(isin, name, broker, fig):
+        brutto, steuer = fig["brutto"], fig["steuer"]
+        return {
+            "ISIN": isin,
+            "Name": name,
+            "Depot": broker,
+            "Brutto-Wert": brutto,
+            "KESt-pflichtiger Gewinn": fig["gewinn"],
+            kest_header: steuer,
+            "Netto-Wert": fig["netto"],
+            "Steueranteil an Brutto-Auszahlung": steuer / brutto if brutto else 0.0,
+        }
+
+    rows = []
+    total = {"brutto": 0.0, "gewinn": 0.0, "steuer": 0.0, "netto": 0.0}
+    sorted_keys = sorted(
+        figures, key=lambda k: (k[2], k[0], k[1])
+    )  # broker, isin, name
+    for broker, group in itertools.groupby(sorted_keys, key=lambda k: k[2]):
+        broker_sum = {"brutto": 0.0, "gewinn": 0.0, "steuer": 0.0, "netto": 0.0}
+        for isin, name, _broker in group:
+            fig = figures[(isin, name, broker)]
+            rows.append(make_row(isin, name, broker, fig))
+            for component in broker_sum:
+                broker_sum[component] += fig[component]
+                total[component] += fig[component]
+        rows.append(make_row("Summe", "", broker, broker_sum))
+        rows.append({col: "" for col in columns})  # blank separator row
+
+    rows.append(make_row("GESAMTSUMME", "", "", total))
+    return pd.DataFrame(rows, columns=columns)
 
 
 def build_results_file(
@@ -839,6 +947,22 @@ def build_results_file(
     args,
 ) -> None:
     with pd.ExcelWriter(excel_out_file, engine="xlsxwriter") as excel_writer:
+        overview_df = collect_overview_summary(
+            portfolio, metadata_by_isin, vap_by_isin_and_year, args
+        )
+        if not overview_df.empty:
+            overview_df.to_excel(excel_writer, sheet_name="Übersicht", index=False)
+            # columns 0-2 are ISIN/Name/Depot, the last column is the tax-share percent
+            n_cols = len(overview_df.columns)
+            adjust_styling_in_sheet(
+                excel_writer,
+                "Übersicht",
+                overview_df,
+                set(range(3, n_cols - 1)),
+                {n_cols - 1},
+                set(),
+            )
+
         vap_summary_df = collect_vap_summary(
             portfolio, metadata_by_isin, vap_by_isin_and_year
         )
