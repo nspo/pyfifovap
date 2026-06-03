@@ -66,7 +66,7 @@ Beispiel-Nutzung:
         "-w",
         "--wertpapiere",
         metavar="FILE",
-        required=False,
+        required=True,
         help="Pfad zur CSV-Datei mit allen Wertpapieren aus PortfolioPerformance (z. B. Securities_(Standard).csv)",
     )
 
@@ -133,32 +133,27 @@ def main():
     i18n_helper = determine_language_from_transactions_file(args.buchungen)
     forex_helper = ForexHelper(offline=args.offline)
 
+    # read securities/metadata first: this yields the ISIN-keyed metadata and the
+    # name -> ISIN map needed to resolve transactions that lack an ISIN.
+    logging.info(f"Lese Metadaten aus {args.metadaten}...")
+    logging.info(f"Lese Wertpapiere aus {args.wertpapiere}...")
+    metadata_by_isin, name_to_isin = read_etf_metadata(
+        args.metadaten, i18n_helper, forex_helper, args.wertpapiere
+    )
+    logging.info(pformat(metadata_by_isin, width=120))
+
     portfolio = read_transactions_into_portfolio(
-        args.buchungen, i18n_helper, forex_helper
+        args.buchungen, i18n_helper, forex_helper, name_to_isin
     )
     print_portfolio_summary(portfolio)
 
-    logging.info(f"Lese Metadaten aus {args.metadaten}...")
-    if args.wertpapiere:
-        logging.info(f"Lese Wertpapiere aus {args.wertpapiere}...")
-    else:
-        logging.warning(
-            "Es wurde keine CSV-Datei mit allen Wertpapieren (-w / --wertpapiere) spezifiziert. "
-            "Aus diesem Grund kann für Wertpapiere kein Gewinn berechnet werden, nur der "
-            "steuerliche Anschaffungspreis."
-        )
-    metadata_by_security = read_etf_metadata(
-        args.metadaten, i18n_helper, forex_helper, args.wertpapiere
-    )
-    logging.info(pformat(metadata_by_security, width=120))
-
     logging.info(f"Lese VAP-Daten aus {args.vap}...")
-    vap_by_security_and_year = read_vap(args.vap, i18n_helper)
-    logging.info(pformat(vap_by_security_and_year))
+    vap_by_isin_and_year = read_vap(args.vap, i18n_helper)
+    logging.info(pformat(vap_by_isin_and_year))
 
     print(f"Generiere Ergebnis-XLSX-Datei {args.output}...")
     build_results_file(
-        portfolio, metadata_by_security, vap_by_security_and_year, args.output, args
+        portfolio, metadata_by_isin, vap_by_isin_and_year, args.output, args
     )
 
 

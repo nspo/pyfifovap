@@ -135,9 +135,37 @@ def parse_money_to_eur(
     return amount
 
 
+def resolve_isin_for_transaction(
+    security_name: str, row_isin: str, name_to_isin: dict[str, str]
+) -> Optional[str]:
+    """Determine a transaction's ISIN from the securities file (the authoritative
+    source), matched by security name.
+
+    Returns the ISIN, or None when the name has no (unique) match in the securities
+    file - in which case the caller should ignore the security.
+
+    `row_isin` is the ISIN from the transaction row (empty when the export has no
+    ISIN column or the cell is blank). It is not used as a source, only as a
+    consistency check: if it is present and disagrees with the securities-file
+    ISIN, the input data is inconsistent and we abort.
+    """
+    securities_isin = name_to_isin.get(security_name)
+    if securities_isin is None:
+        return None
+    if row_isin and row_isin != securities_isin:
+        logging.error(
+            f"ISIN-Konflikt für das Wertpapier '{security_name}': In der Buchungs-Datei "
+            f"'{row_isin}', in der Wertpapier-Datei '{securities_isin}'. Bitte die "
+            f"widersprüchlichen Daten korrigieren."
+        )
+        exit(1)
+    return securities_isin
+
+
 def handle_portfolio_purchase(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
     row,
+    security_isin: str,
     i18n_helper: I18nHelper,
     forex_helper: "ForexHelper",
 ) -> None:
@@ -148,14 +176,14 @@ def handle_portfolio_purchase(
     security_name = row[pp_names.SECURITY]
     account_name = row[pp_names.CASH_ACCOUNT]
     maybe_warn_about_long_account_names(account_name)
-    account = portfolio[account_name][security_name]
+    account = portfolio[account_name][security_isin]
     purchased_date = datetime.datetime.fromisoformat(row[pp_names.DATE])
     purchased_value = parse_money_to_eur(
         row[pp_names.NET_TRANSACTION_VALUE], i18n_helper, forex_helper, purchased_date
     )
 
     lot = SecurityLot(
-        security_isin=row[pp_names.ISIN] if pp_names.ISIN in row.index else "",
+        security_isin=security_isin,
         security_name=security_name,
         purchased_date=purchased_date,
         purchased_index=row["Index"],
@@ -171,6 +199,7 @@ def handle_portfolio_purchase(
 def handle_portfolio_transfer_outbound(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
     row,
+    security_isin: str,
     i18n_helper: I18nHelper,
 ) -> None:
     pp_names = i18n_helper.get_pp_names()
@@ -187,8 +216,8 @@ def handle_portfolio_transfer_outbound(
         logging.debug(pformat(row))
         return
     maybe_warn_about_long_account_names(account_to_name)
-    account_from = portfolio[account_from_name][security_name]
-    account_to = portfolio[account_to_name][security_name]
+    account_from = portfolio[account_from_name][security_isin]
+    account_to = portfolio[account_to_name][security_isin]
     needed_shares = i18n_helper.parse_float(row[pp_names.SHARES])
     while needed_shares > 1e-5:
         if not account_from:
@@ -208,7 +237,7 @@ def handle_portfolio_transfer_outbound(
             account_to.add(account_from.pop(0))
             if not account_from:
                 # remove entry for this security
-                portfolio[account_from_name].pop(row[pp_names.SECURITY])
+                portfolio[account_from_name].pop(security_isin)
             needed_shares -= available_shares
         else:
             # move part of the lot
@@ -230,6 +259,7 @@ def handle_portfolio_transfer_outbound(
 def remove_shares_fifo(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
     account_name: str,
+    security_isin: str,
     security_name: str,
     num_shares: float,
     row,
@@ -238,11 +268,11 @@ def remove_shares_fifo(
     """Remove shares of a security from an account, oldest lots first (FIFO).
 
     Used for both sales and outbound deliveries - in either case the shares
-    simply leave the account (there is no destination). `operation_label` is the
-    German operation noun used in the log messages (e.g. "Verkauf",
-    "Auslieferung").
+    simply leave the account (there is no destination). The account is keyed by
+    ISIN; `security_name` is only used in the log messages. `operation_label` is
+    the German operation noun for those messages (e.g. "Verkauf", "Auslieferung").
     """
-    account = portfolio[account_name][security_name]
+    account = portfolio[account_name][security_isin]
     while num_shares > 1e-5:
         if not account:
             logging.error(pformat(row))
@@ -261,7 +291,7 @@ def remove_shares_fifo(
             account.pop(0)
             if not account:
                 # remove entry for this security
-                portfolio[account_name].pop(security_name)
+                portfolio[account_name].pop(security_isin)
             num_shares -= available_shares
         else:
             # remove part of the lot
@@ -279,6 +309,7 @@ def remove_shares_fifo(
 def handle_portfolio_sale(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
     row,
+    security_isin: str,
     i18n_helper: I18nHelper,
 ) -> None:
     pp_names = i18n_helper.get_pp_names()
@@ -288,6 +319,7 @@ def handle_portfolio_sale(
     remove_shares_fifo(
         portfolio,
         row[pp_names.CASH_ACCOUNT],
+        security_isin,
         row[pp_names.SECURITY],
         num_shares,
         row,
@@ -298,6 +330,7 @@ def handle_portfolio_sale(
 def handle_portfolio_delivery_outbound(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
     row,
+    security_isin: str,
     i18n_helper: I18nHelper,
 ) -> None:
     pp_names = i18n_helper.get_pp_names()
@@ -309,6 +342,7 @@ def handle_portfolio_delivery_outbound(
     remove_shares_fifo(
         portfolio,
         row[pp_names.CASH_ACCOUNT],
+        security_isin,
         row[pp_names.SECURITY],
         num_shares,
         row,
@@ -328,8 +362,31 @@ def maybe_warn_about_long_account_names(account_name: str) -> None:
             _warned_messages.add(warn_msg)
 
 
+def warn_about_isin_name_collisions(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+) -> None:
+    """Warn when several security names share one ISIN within an account.
+
+    Such names are merged into a single security (one shared FIFO queue). That is
+    intended for name variants of the same security, but the warning lets the user
+    notice genuinely distinct securities that share an ISIN by mistake.
+    """
+    for account in portfolio:
+        for isin, lots in portfolio[account].items():
+            names = sorted({lot.security_name for lot in lots})
+            if len(names) > 1:
+                logging.warning(
+                    f"Im Depot '{account}' teilen sich mehrere Wertpapier-Namen die ISIN "
+                    f"{isin}: {', '.join(names)}. Sie werden als ein Wertpapier (gemeinsame "
+                    f"FIFO-Reihe) behandelt."
+                )
+
+
 def read_transactions_into_portfolio(
-    transactions_file: str, i18n_helper: I18nHelper, forex_helper: ForexHelper
+    transactions_file: str,
+    i18n_helper: I18nHelper,
+    forex_helper: ForexHelper,
+    name_to_isin: dict[str, str],
 ) -> defaultdict[str, defaultdict[str, SortedList]]:
     data = pd.read_csv(
         transactions_file, keep_default_na=False, sep=i18n_helper.get_pp_csv_separator()
@@ -339,32 +396,66 @@ def read_transactions_into_portfolio(
     data["Index"] = data.index
     data.sort_values(by=[pp_names.DATE, "Index"], inplace=True)
 
-    if pp_names.ISIN not in data.columns:
-        # not optimal, but currently not used for matching
-        warn_msg = (
-            "In der Transaktionsliste wurde keine ISIN-Spalte gefunden. Es ist empfohlen, "
-            "beim Export die Spalte ISIN zu aktivieren. Aktuell wird jedoch primär der Name "
-            "von Wertpapieren für die Zuordnung genutzt."
-        )
-        logging.info(warn_msg)
+    has_isin_column = pp_names.ISIN in data.columns
 
-    # mapping: broker name -> security name -> SortedList[SecurityLot]
+    # mapping: broker name -> security ISIN -> SortedList[SecurityLot]
     portfolio: defaultdict[str, defaultdict[str, SortedList]] = defaultdict(
         lambda: defaultdict(SortedList)
     )
 
+    transaction_types = (
+        pp_names.TYPE_BUY,
+        pp_names.TYPE_DELIVERY_INBOUND,
+        pp_names.TYPE_TRANSFER_OUTBOUND,
+        pp_names.TYPE_SELL,
+        pp_names.TYPE_DELIVERY_OUTBOUND,
+    )
+    dropped_securities: set[str] = set()
+
     for index, row in data.iterrows():
+        if row[pp_names.TYPE] not in transaction_types:
+            continue
+
+        security_name = row[pp_names.SECURITY]
+        if security_name:
+            row_isin = row[pp_names.ISIN] if has_isin_column else ""
+            security_isin = resolve_isin_for_transaction(
+                security_name, row_isin, name_to_isin
+            )
+            if security_isin is None:
+                dropped_securities.add(security_name)
+                continue
+        else:
+            # Cash transactions (e.g. cash transfers) carry no security; the handlers
+            # skip them, so leave the ISIN empty and do not attempt to resolve it.
+            security_isin = ""
+
         logging.debug("Verarbeite Zeile:")
         logging.debug(pformat(row))
         if row[pp_names.TYPE] in (pp_names.TYPE_BUY, pp_names.TYPE_DELIVERY_INBOUND):
-            handle_portfolio_purchase(portfolio, row, i18n_helper, forex_helper)
+            handle_portfolio_purchase(
+                portfolio, row, security_isin, i18n_helper, forex_helper
+            )
         elif row[pp_names.TYPE] == pp_names.TYPE_TRANSFER_OUTBOUND:
-            handle_portfolio_transfer_outbound(portfolio, row, i18n_helper)
+            handle_portfolio_transfer_outbound(
+                portfolio, row, security_isin, i18n_helper
+            )
         elif row[pp_names.TYPE] == pp_names.TYPE_SELL:
-            handle_portfolio_sale(portfolio, row, i18n_helper)
+            handle_portfolio_sale(portfolio, row, security_isin, i18n_helper)
         elif row[pp_names.TYPE] == pp_names.TYPE_DELIVERY_OUTBOUND:
-            handle_portfolio_delivery_outbound(portfolio, row, i18n_helper)
+            handle_portfolio_delivery_outbound(
+                portfolio, row, security_isin, i18n_helper
+            )
 
+    if dropped_securities:
+        logging.warning(
+            "Für folgende Wertpapiere wurde keine ISIN in der Wertpapier-Datei gefunden, "
+            "ihre Buchungen wurden ignoriert (häufig bereits vollständig verkaufte "
+            "Wertpapiere, die nicht mehr in der Wertpapier-Datei stehen): "
+            + ", ".join(sorted(dropped_securities))
+        )
+
+    warn_about_isin_name_collisions(portfolio)
     return portfolio
 
 
@@ -380,128 +471,156 @@ def read_etf_metadata(
     metadata_file: str,
     i18n_helper: I18nHelper,
     forex_helper: ForexHelper,
-    securities_file: str = None,
-) -> dict[str, ETFMetadata]:
+    securities_file: str,
+) -> tuple[dict[str, ETFMetadata], dict[str, str]]:
+    """Read ETF metadata, keyed by ISIN.
+
+    Returns ``(metadata_by_isin, name_to_isin)``. ``name_to_isin`` is derived
+    solely from the (required) securities file and is used to resolve missing
+    ISINs in the transactions file via name matching; a name mapping to several
+    ISINs is ambiguous and is left out.
+    """
     pp_names = i18n_helper.get_pp_names()
     custom_names = i18n_helper.get_custom_csv_names()
     data = pd.read_csv(metadata_file, keep_default_na=False)
 
-    metadata_by_security: dict[str, ETFMetadata] = dict()
+    metadata_by_isin: dict[str, ETFMetadata] = dict()
+    name_to_isin: dict[str, str] = dict()
 
     for index, row in data.iterrows():
         security_name = row[custom_names.NAME]
         security_isin = row[custom_names.ISIN]
+        if not security_isin:
+            logging.warning(
+                f"Metadaten-Eintrag '{security_name}' ohne ISIN wird ignoriert."
+            )
+            continue
         security_tfs = int(row[custom_names.PROZENT_TEILFREISTELLUNG])
-        metadata_by_security[security_name] = ETFMetadata(
+        metadata_by_isin[security_isin] = ETFMetadata(
             name=security_name, isin=security_isin, tfs_percentage=security_tfs
         )
 
-    if securities_file:
-        # read quotes
-        data = pd.read_csv(
-            securities_file,
-            keep_default_na=False,
-            sep=i18n_helper.get_pp_csv_separator(),
-        )
-        for _, row in data.iterrows():
-            security_name = row[pp_names.NAME]
-            security_isin = row[pp_names.ISIN]
-            # currently not relevant
-            # security_latest_quote_date = row["Latest (Date)"]
-            security_latest_quote = row[pp_names.LATEST_QUOTE]
-            if " " in security_latest_quote:
-                # foreign currency... well, let's try
-                other_curr = security_latest_quote.split(" ")[0]
-                fx_factor_eur_to_fx = forex_helper.request_factor_eur_to_forex(
-                    other_curr
+    data = pd.read_csv(
+        securities_file,
+        keep_default_na=False,
+        sep=i18n_helper.get_pp_csv_separator(),
+    )
+
+    # build the name -> ISIN map; a name with more than one ISIN is ambiguous
+    names_to_isins: defaultdict[str, set] = defaultdict(set)
+    for _, row in data.iterrows():
+        name = row[pp_names.NAME]
+        isin = row[pp_names.ISIN]
+        if name and isin:
+            names_to_isins[name].add(isin)
+    for name, isins in names_to_isins.items():
+        if len(isins) == 1:
+            name_to_isin[name] = next(iter(isins))
+        else:
+            logging.error(
+                f"Wertpapier-Name '{name}' ist in der Wertpapier-Datei nicht eindeutig "
+                f"(mehrere ISINs) - keine Namens-Zuordnung möglich."
+            )
+            exit(1)
+
+    # read quotes
+    for _, row in data.iterrows():
+        security_name = row[pp_names.NAME]
+        security_isin = row[pp_names.ISIN]
+        if not security_isin:
+            # securities without an ISIN (e.g. crypto) are skipped; if one is actually
+            # held, read_transactions_into_portfolio reports it in its summary.
+            continue
+        # currently not relevant
+        # security_latest_quote_date = row["Latest (Date)"]
+        security_latest_quote = row[pp_names.LATEST_QUOTE]
+        if not security_latest_quote:
+            # no quote available - keep the security known but without a quote
+            metadata_by_isin.setdefault(
+                security_isin,
+                ETFMetadata(name=security_name, isin=security_isin, tfs_percentage=0),
+            )
+            continue
+        if " " in security_latest_quote:
+            # foreign currency... well, let's try
+            other_curr = security_latest_quote.split(" ")[0]
+            fx_factor_eur_to_fx = forex_helper.request_factor_eur_to_forex(other_curr)
+            if fx_factor_eur_to_fx:
+                logging.debug(
+                    f"Wende Forex-Faktor {fx_factor_eur_to_fx} für {other_curr} an..."
                 )
-                if fx_factor_eur_to_fx:
-                    logging.debug(
-                        f"Wende Forex-Faktor {fx_factor_eur_to_fx} für {other_curr} an..."
-                    )
-                    security_latest_quote = (
-                        i18n_helper.parse_float(security_latest_quote.split(" ")[1])
-                        / fx_factor_eur_to_fx
-                    )
-                else:
-                    logging.warning(
-                        f"Kein Forex-Faktor für {other_curr} gefunden, überspringe Kurs für {security_name}"
-                    )
-                    continue
-            else:
-                security_latest_quote = i18n_helper.parse_float(security_latest_quote)
-
-            if security_name in metadata_by_security:
-                if (
-                    metadata_by_security[security_name].isin
-                    and security_isin
-                    and metadata_by_security[security_name].isin != security_isin
-                ):
-                    logging.error(
-                        f"Inkonsistente ISIN für {security_name} in {metadata_file} "
-                        f"({metadata_by_security[security_name].isin}) und in {securities_file}"
-                        f" ({security_isin})"
-                    )
-                    exit(1)
-
-                metadata_by_security[security_name] = dataclasses.replace(
-                    metadata_by_security[security_name],
-                    isin=security_isin
-                    if security_isin
-                    else metadata_by_security[security_name].isin,
-                    last_quote_eur=security_latest_quote,
+                security_latest_quote = (
+                    i18n_helper.parse_float(security_latest_quote.split(" ")[1])
+                    / fx_factor_eur_to_fx
                 )
             else:
-                metadata_by_security[security_name] = ETFMetadata(
-                    name=security_name,
-                    isin=security_isin,
-                    tfs_percentage=0,
-                    last_quote_eur=security_latest_quote,
+                logging.warning(
+                    f"Kein Forex-Faktor für {other_curr} gefunden, überspringe Kurs für {security_name}"
                 )
+                continue
+        else:
+            security_latest_quote = i18n_helper.parse_float(security_latest_quote)
 
-    return metadata_by_security
+        if security_isin in metadata_by_isin:
+            metadata_by_isin[security_isin] = dataclasses.replace(
+                metadata_by_isin[security_isin],
+                last_quote_eur=security_latest_quote,
+            )
+        else:
+            metadata_by_isin[security_isin] = ETFMetadata(
+                name=security_name,
+                isin=security_isin,
+                tfs_percentage=0,
+                last_quote_eur=security_latest_quote,
+            )
+
+    return metadata_by_isin, name_to_isin
 
 
 def read_vap(
     vap_file: str, i18n_helper: I18nHelper
 ) -> defaultdict[str, defaultdict[int, float]]:
     """
-    Beispiel-Ergebnis:
+    Beispiel-Ergebnis (je ISIN):
     {
-         'Vanguard FTSE All-World Acc ETF': {2023: 1.63781,
-                                             2024: 1.71817,
-                                             2025: 2.39935},
-         'Vanguard FTSE All-World Dist ETF': {2023: 0.0,
-                                              2024: 0.0,
-                                              2025: 0.39021}
+         'IE00BK5BQT80': {2023: 1.63781,
+                          2024: 1.71817,
+                          2025: 2.39935},
+         'IE00B3RBWM25': {2023: 0.0,
+                          2024: 0.0,
+                          2025: 0.39021}
     }
     """
     custom_names = i18n_helper.get_custom_csv_names()
     data = pd.read_csv(vap_file, keep_default_na=False)
 
-    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]] = defaultdict(
+    vap_by_isin_and_year: defaultdict[str, defaultdict[int, float]] = defaultdict(
         lambda: defaultdict(float)
     )
     for index, row in data.iterrows():
         security_name = row[custom_names.NAME]
+        security_isin = row[custom_names.ISIN]
+        if not security_isin:
+            logging.warning(f"VAP-Eintrag '{security_name}' ohne ISIN wird ignoriert.")
+            continue
         year = int(row[custom_names.JAHR_DES_WERTZUWACHES])
         vap_vor_tfs = float(row[custom_names.VAP_VOR_TFS_PRO_ANTEIL])
-        vap_by_security_and_year[security_name][year] = vap_vor_tfs
+        vap_by_isin_and_year[security_isin][year] = vap_vor_tfs
 
-    return vap_by_security_and_year
+    return vap_by_isin_and_year
 
 
 # returns "VAP vor TFS pro Anteil" for each year as list, if any
 # Beispiel-Ergebnis:
 # [(2023, 0.23), (2024, 0.89)]
 def determine_vap_list(
-    security: str,
-    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
+    isin: str,
+    vap_by_isin_and_year: defaultdict[str, defaultdict[int, float]],
     lot: SecurityLot,
 ) -> list[tuple[int, float]]:
     vap_list_per_share_before_tfs = []
-    if security in vap_by_security_and_year:
-        for year in vap_by_security_and_year[security]:
+    if isin in vap_by_isin_and_year:
+        for year in vap_by_isin_and_year[isin]:
             purchased_year = lot.purchased_date.year
             if year < purchased_year:
                 # no VAP if this lot hadn't been bought yet during this year
@@ -516,7 +635,7 @@ def determine_vap_list(
                     # full year
                     proportion_of_year = 1.0
                 vap_per_share_before_tfs = (
-                    proportion_of_year * vap_by_security_and_year[security][year]
+                    proportion_of_year * vap_by_isin_and_year[isin][year]
                 )
             if vap_per_share_before_tfs > 0:
                 vap_list_per_share_before_tfs.append((year, vap_per_share_before_tfs))
@@ -627,8 +746,8 @@ def determine_tax_factor_and_header(args) -> tuple[float, str]:
 
 def collect_vap_summary(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
-    metadata_by_security: dict[str, ETFMetadata],
-    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
+    metadata_by_isin: dict[str, ETFMetadata],
+    vap_by_isin_and_year: defaultdict[str, defaultdict[int, float]],
 ) -> pd.DataFrame:
     """
     Summe der Vorabpauschalen (vor und nach TFS) je Depot, ISIN und Jahr als DataFrame.
@@ -641,25 +760,19 @@ def collect_vap_summary(
     vap_summary = defaultdict(lambda: defaultdict(float))
 
     for broker in portfolio:
-        for security in portfolio[broker]:
-            if security in metadata_by_security:
-                isin = metadata_by_security[security].isin
-                tfs_percentage = metadata_by_security[security].tfs_percentage
+        for isin in portfolio[broker]:
+            lots = portfolio[broker][isin]
+            if isin in metadata_by_isin:
+                name = metadata_by_isin[isin].name
+                tfs_percentage = metadata_by_isin[isin].tfs_percentage
             else:
-                lots = portfolio[broker][security]
-                if lots and lots[0].security_isin:
-                    isin = lots[0].security_isin
-                else:
-                    isin = ""
+                name = lots[0].security_name if lots else ""
                 tfs_percentage = 0
 
-            if not isin:
-                continue
+            key = (isin, name, broker, tfs_percentage)
 
-            key = (isin, security, broker, tfs_percentage)
-
-            for lot in portfolio[broker][security]:
-                vap_list = determine_vap_list(security, vap_by_security_and_year, lot)
+            for lot in lots:
+                vap_list = determine_vap_list(isin, vap_by_isin_and_year, lot)
                 for year, vap_per_share_before_tfs in vap_list:
                     logging.debug(
                         f"ISIN: {isin}, Depot: {broker}, Jahr: {year}, VAP pro Anteil (vor TFS): {vap_per_share_before_tfs} lot.unsold_shares: {lot.unsold_shares}"
@@ -720,14 +833,14 @@ def collect_vap_summary(
 
 def build_results_file(
     portfolio: defaultdict[str, defaultdict[str, SortedList]],
-    metadata_by_security: dict[str, ETFMetadata],
-    vap_by_security_and_year: defaultdict[str, defaultdict[int, float]],
+    metadata_by_isin: dict[str, ETFMetadata],
+    vap_by_isin_and_year: defaultdict[str, defaultdict[int, float]],
     excel_out_file: str,
     args,
 ) -> None:
     with pd.ExcelWriter(excel_out_file, engine="xlsxwriter") as excel_writer:
         vap_summary_df = collect_vap_summary(
-            portfolio, metadata_by_security, vap_by_security_and_year
+            portfolio, metadata_by_isin, vap_by_isin_and_year
         )
         if not vap_summary_df.empty:
             vap_summary_df.to_excel(excel_writer, sheet_name="VAP", index=False)
@@ -737,11 +850,12 @@ def build_results_file(
             )
 
         for broker in portfolio:
-            for security in portfolio[broker]:
-                if security in metadata_by_security:
-                    isin = metadata_by_security[security].isin
+            for isin in portfolio[broker]:
+                lots = portfolio[broker][isin]
+                if isin in metadata_by_isin:
+                    name = metadata_by_isin[isin].name
                 else:
-                    isin = ""
+                    name = lots[0].security_name if lots else ""
 
                 result = []
                 # remember how to style each column
@@ -752,18 +866,16 @@ def build_results_file(
                 first_lot = True
                 previous_taxable_gains = 0.0  # kann ggf. zur Verrechnung mit späteren Verlusten genutzt werden
                 lot: SecurityLot
-                for lot in portfolio[broker][security]:
+                for lot in lots:
                     column_index = 0  # keep track of the next column index that will be added (for styling purposes)
                     # VAP calculation
                     vap_list_per_share_before_tfs = determine_vap_list(
-                        security, vap_by_security_and_year, lot
+                        isin, vap_by_isin_and_year, lot
                     )
-                    if not isin and lot.security_isin:
-                        isin = lot.security_isin
 
                     lot_dict = {
                         "ISIN": isin,
-                        "Name": security,
+                        "Name": name,
                         "Datum Kauf": lot.purchased_date.date(),
                         "Anzahl (noch unverkauft)": lot.unsold_shares,
                         "Anzahl (gekauft)": lot.purchased_shares,
@@ -807,10 +919,10 @@ def build_results_file(
                             lot.purchased_value / lot.purchased_shares
                         )
                     if (
-                        security in metadata_by_security
-                        and metadata_by_security[security].last_quote_eur
+                        isin in metadata_by_isin
+                        and metadata_by_isin[isin].last_quote_eur
                     ):
-                        metadata = metadata_by_security[security]
+                        metadata = metadata_by_isin[isin]
                         # can determine taxable gain as there is a current price known
                         lot_dict["Brutto-Wert"] = (
                             metadata.last_quote_eur * lot.unsold_shares
@@ -866,7 +978,7 @@ def build_results_file(
                     first_lot = False
 
                 df = pd.DataFrame(result)
-                sheet_name = f"{broker} " + (isin if isin != "" else security)
+                sheet_name = f"{broker} " + (isin if isin != "" else name)
                 sheet_name = sheet_name[:31]  # sheet names have a max length
                 df.to_excel(excel_writer, sheet_name=sheet_name, index=False)
 
@@ -887,11 +999,13 @@ def print_portfolio_summary(
         if not portfolio[broker]:
             continue
         logging.info(f"-- Broker: {broker}")
-        for security in portfolio[broker]:
+        for isin in portfolio[broker]:
+            lots = portfolio[broker][isin]
             num_shares = 0
-            for lot in portfolio[broker][security]:
+            for lot in lots:
                 num_shares += lot.unsold_shares
-            logging.info(f"{security}: {num_shares} Anteile noch verfügbar")
+            name = lots[0].security_name if lots else ""
+            logging.info(f"{name} ({isin}): {num_shares} Anteile noch verfügbar")
 
 
 def determine_language_from_transactions_file(transactions_file: str) -> I18nHelper:

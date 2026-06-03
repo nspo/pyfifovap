@@ -1,5 +1,6 @@
 import dataclasses
 import datetime
+import logging
 import math
 from collections import defaultdict
 
@@ -17,6 +18,8 @@ from pyfifovap import (
     determine_tax_factor_and_header,
     determine_taxable_gains_to_consider,
     parse_money_to_eur,
+    resolve_isin_for_transaction,
+    warn_about_isin_name_collisions,
 )
 
 
@@ -87,12 +90,12 @@ def test_collect_vap_summary_per_broker_subtotals():
     # Two brokers, each with one ETF that has a VAP in 2024. Guards against the bug where
     # every per-broker "Summe" row aliased the same dict and showed the last broker's subtotal.
     meta = {
-        "ETF A": ETFMetadata(name="ETF A", isin="AAA", tfs_percentage=30),
-        "ETF B": ETFMetadata(name="ETF B", isin="BBB", tfs_percentage=0),
+        "AAA": ETFMetadata(name="ETF A", isin="AAA", tfs_percentage=30),
+        "BBB": ETFMetadata(name="ETF B", isin="BBB", tfs_percentage=0),
     }
     vap = defaultdict(lambda: defaultdict(float))
-    vap["ETF A"][2024] = 1.0
-    vap["ETF B"][2024] = 2.0
+    vap["AAA"][2024] = 1.0
+    vap["BBB"][2024] = 2.0
 
     def lot(isin, shares):
         return SecurityLot(
@@ -106,10 +109,10 @@ def test_collect_vap_summary_per_broker_subtotals():
         )
 
     portfolio = defaultdict(lambda: defaultdict(SortedList))
-    portfolio["Broker1"]["ETF A"].add(
+    portfolio["Broker1"]["AAA"].add(
         lot("AAA", 10)
     )  # 10 * 1.0 = 10 vor TFS, 30% TFS -> 7 nach TFS
-    portfolio["Broker2"]["ETF B"].add(
+    portfolio["Broker2"]["BBB"].add(
         lot("BBB", 5)
     )  # 5 * 2.0 = 10 vor TFS, 0% TFS -> 10 nach TFS
 
@@ -146,16 +149,16 @@ def test_collect_vap_summary_per_broker_subtotals():
 def test_collect_vap_summary_multi_broker_multi_year():
     # Three brokers, three ETFs (one held at two brokers), VAP across two years.
     meta = {
-        "ETF A": ETFMetadata(name="ETF A", isin="AAA", tfs_percentage=30),
-        "ETF B": ETFMetadata(name="ETF B", isin="BBB", tfs_percentage=0),
-        "ETF C": ETFMetadata(name="ETF C", isin="CCC", tfs_percentage=15),
+        "AAA": ETFMetadata(name="ETF A", isin="AAA", tfs_percentage=30),
+        "BBB": ETFMetadata(name="ETF B", isin="BBB", tfs_percentage=0),
+        "CCC": ETFMetadata(name="ETF C", isin="CCC", tfs_percentage=15),
     }
     vap = defaultdict(lambda: defaultdict(float))
-    vap["ETF A"][2023] = 1.0
-    vap["ETF A"][2024] = 1.5
-    vap["ETF B"][2024] = 2.0
-    vap["ETF C"][2023] = 0.5
-    vap["ETF C"][2024] = 4.0
+    vap["AAA"][2023] = 1.0
+    vap["AAA"][2024] = 1.5
+    vap["BBB"][2024] = 2.0
+    vap["CCC"][2023] = 0.5
+    vap["CCC"][2024] = 4.0
 
     def lot(isin, shares):
         return SecurityLot(
@@ -169,10 +172,10 @@ def test_collect_vap_summary_multi_broker_multi_year():
         )
 
     portfolio = defaultdict(lambda: defaultdict(SortedList))
-    portfolio["Broker1"]["ETF A"].add(lot("AAA", 10))
-    portfolio["Broker1"]["ETF C"].add(lot("CCC", 4))
-    portfolio["Broker2"]["ETF B"].add(lot("BBB", 5))
-    portfolio["Broker3"]["ETF A"].add(lot("AAA", 2))
+    portfolio["Broker1"]["AAA"].add(lot("AAA", 10))
+    portfolio["Broker1"]["CCC"].add(lot("CCC", 4))
+    portfolio["Broker2"]["BBB"].add(lot("BBB", 5))
+    portfolio["Broker3"]["AAA"].add(lot("AAA", 2))
 
     df = collect_vap_summary(portfolio, meta, vap)
 
@@ -213,6 +216,49 @@ def test_collect_vap_summary_multi_broker_multi_year():
     assert (total["Summe vor TFS"], total["Summe nach TFS"]) == pytest.approx(
         (58.0, 46.3)
     )
+
+
+def test_resolve_isin_for_transaction():
+    name_to_isin = {"ETF A": "AAA"}
+
+    # ISIN comes from the securities file, matched by name
+    assert resolve_isin_for_transaction("ETF A", "", name_to_isin) == "AAA"
+    # a matching transaction-row ISIN is accepted
+    assert resolve_isin_for_transaction("ETF A", "AAA", name_to_isin) == "AAA"
+    # name not in the securities file -> dropped (None)
+    assert resolve_isin_for_transaction("Unbekannt", "", name_to_isin) is None
+    # transaction-row ISIN conflicts with the securities file -> abort
+    with pytest.raises(SystemExit):
+        resolve_isin_for_transaction("ETF A", "ZZZ", name_to_isin)
+
+
+def test_warn_about_isin_name_collisions(caplog):
+    def lot(isin, name, index):
+        return SecurityLot(
+            security_isin=isin,
+            security_name=name,
+            purchased_date=datetime.datetime(2020, 1, 1),
+            purchased_index=index,
+            purchased_shares=1,
+            purchased_value=1.0,
+            unsold_shares=1,
+        )
+
+    portfolio = defaultdict(lambda: defaultdict(SortedList))
+    # same ISIN, two different names, same account -> merged, should warn
+    portfolio["Depot1"]["AAA"].add(lot("AAA", "ETF A", 0))
+    portfolio["Depot1"]["AAA"].add(lot("AAA", "ETF A (alt)", 1))
+    # a single-name position must not warn
+    portfolio["Depot2"]["BBB"].add(lot("BBB", "ETF B", 2))
+
+    with caplog.at_level(logging.WARNING):
+        warn_about_isin_name_collisions(portfolio)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "Depot1" in warnings[0].message
+    assert "AAA" in warnings[0].message
+    assert "ETF A" in warnings[0].message and "ETF A (alt)" in warnings[0].message
 
 
 def test_tax_factor():

@@ -65,7 +65,7 @@ FIFO ältere Chargen mit Gewinnen vorhanden sind.
 - Die Basiswährung in Portfolio Performance ist EUR (Wertpapiere notiert in Fremdwährungen werden jedoch prinzipiell
   auch
   unterstützt)
-- Es geht um KESt-pflichtige Wertpapiere wie Fonds/ETFs oder Aktien
+- Es geht um KESt-pflichtige Wertpapiere wie Fonds/ETFs oder Aktien mit hinterlegter ISIN
 - Dir ist klar, dass dieses Werkzeug Fehler beinhalten kann und keine Steuerberatung darstellt
 - Du bist steuerpflichtig in Deutschland :)
 - Du kannst ein Python-Skript starten
@@ -77,8 +77,8 @@ Grundlegend:
 - Portfolio Performance öffnen
 - Unter "Alle Buchungen" -> "Daten exportieren" (ganz rechts) einen CSV-Export der Buchungen erstellen
 - Unter "Alle Wertpapiere" -> "Daten exportieren" (ganz rechts) einen CSV-Export der Wertpapiere erstellen.
-    - Dies ist zwar nicht Pflicht zur Nutzung des Werkzeugs, ohne kann allerdings nur der steuerliche Anschaffungspreis
-      statt vollständigen Details zum aktuellen Gewinn bei Realisierung bestimmt werden
+    - Aus diesem Export wird die Zuordnung der
+      Wertpapiere über die ISIN aufgebaut und der aktuelle Kurs für die Gewinnberechnung gelesen
 
 ![](docs/pp_export.png)
 
@@ -101,6 +101,21 @@ Alternativ können Beispiel-Daten genutzt werden:
 $ ./main.py -b Beispiele/Alle_Buchungen.csv -w "Beispiele/Wertpapiere_(Standard).csv"
 ```
 
+## Zuordnung von Wertpapieren über die ISIN
+
+pyfifovap ordnet Buchungen, Wertpapiere, Teilfreistellung und Vorabpauschalen über die **ISIN** zu (nicht über den
+Namen). Das ist robust gegenüber abweichenden oder geänderten Wertpapier-Namen - z. B. wenn dasselbe Wertpapier bei
+verschiedenen Brokern unterschiedlich benannt ist.
+
+- Der Wertpapier-Export (`-w` / `--wertpapiere`) ist **erforderlich** und ist die zentrale Quelle für die ISINs (und
+  liefert die aktuellen Kurse). Die ISIN je Buchung wird per **eindeutigem** Namensabgleich aus dieser Datei ermittelt.
+- Enthält der Buchungs-Export selbst eine ISIN-Spalte, wird diese nur zur Kontrolle mit der Wertpapier-Datei
+  abgeglichen; bei einem Widerspruch bricht das Programm ab.
+- Wertpapiere, für die keine ISIN in der Wertpapier-Datei gefunden wird (z. B. Kryptowährungen ohne ISIN), werden mit
+  einer Warnung ignoriert.
+- Auch in `etf_metadaten.csv` und `etf_vorabpauschalen.csv` erfolgt die Zuordnung über die ISIN; Einträge ohne ISIN
+  werden ignoriert. Der dort angegebene Name dient nur der Anzeige.
+
 ## Vorabpauschalen (VAP) richtig berechnen
 
 Zur korrekten Berechnung bereits versteuerter Vorabpauschalen muss pyfifovap pro Wertpapier und Jahr
@@ -109,12 +124,12 @@ Dies wird beispielsweise auf folgende Weise konfiguriert:
 
 ```csv
 ISIN,Name,Jahr des Wertzuwachses,Vorabpauschale vor TFS pro Anteil
-IE00BK5BQT80,Vanguard FTSE All-World Acc ETF,2023,1.63781
-IE00BK5BQT80,Vanguard FTSE All-World Acc ETF,2024,1.71817
-IE00BK5BQT80,Vanguard FTSE All-World Acc ETF,2025,2.39935
+IE00BK5BQT80,Vanguard FTSE All-World Acc ETF,2023,1.637814250
+IE00BK5BQT80,Vanguard FTSE All-World Acc ETF,2024,1.718172340
+IE00BK5BQT80,Vanguard FTSE All-World Acc ETF,2025,2.382607760
 IE00B3RBWM25,Vanguard FTSE All-World Dist ETF,2023,0.0
 IE00B3RBWM25,Vanguard FTSE All-World Dist ETF,2024,0.0
-IE00B3RBWM25,Vanguard FTSE All-World Dist ETF,2025,0.39021
+IE00B3RBWM25,Vanguard FTSE All-World Dist ETF,2025,0.353446870
 ```
 
 Die hier je Jahr gelistete VAP darf noch nicht durch eine ggf. vorhandene
@@ -122,9 +137,6 @@ Teilfreistellung (TFS) reduziert sein.
 Falls genug Ausschüttungen in einem Kalenderjahr vorhanden waren, ist die VAP ggf. 0 (wie in zwei von drei Jahren
 des genanntenten Dist-ETFs) oder klein (wie in der letzten Zeile).
 Sollte für ein Jahr kein Eintrag existieren, gilt die implizite Annahme, dass hierfür keine VAP anfällt.
-
-Hinweis: Die tatsächlichen **Vorabpauschalen fürs Jahr 2025** stehen aktuell (Dezember 2025) natürlich noch nicht sicher
-fest.
 
 ### VAP-Einträge bestimmen
 
@@ -146,7 +158,7 @@ werden, jedoch ist hierbei insbesondere auf eine gute Quelle für den Anteilspre
 Es wird bereits eine Datei mit einigen VAP-Werten zur Verfügung gestellt.
 Bei Updates ist wichtig, dass
 
-- die **Namen** und ISINs von Wertpapieren genau zur Schreibweise in Portfolio Performance passen
+- die **ISINs** der Wertpapiere korrekt sind (die Zuordnung erfolgt über die ISIN; der Name dient nur der Anzeige)
 - Die englische Schreibweise von Dezimalzahlen (`1.71817`) mit Punkt statt Komma als Dezimaltrenner verwendet wird
 
 ## Teilfreistellung (TFS) von Aktien- und Mischfonds berücksichtigen
