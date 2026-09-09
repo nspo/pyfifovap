@@ -1,18 +1,16 @@
 import dataclasses
 import datetime
 import itertools
+import logging
+import sys
 from collections import defaultdict
 from pprint import pformat
-from typing import Optional
-
-from sortedcontainers import SortedList
-
-from i18n_helper import I18nHelper
 
 import pandas as pd
 import yfinance
+from sortedcontainers import SortedList
 
-import logging
+from i18n_helper import I18nHelper
 
 _warned_messages = set()  # hack to make it possible to log warnings only once
 
@@ -39,15 +37,15 @@ class ForexHelper:
         self.offline = offline
         # factor from EUR -> forex currency, keyed by (currency, date); date is a datetime.date
         # for a historical rate or None for the latest available quote
-        self.eur_to_forex_cache: dict[tuple[str, Optional[datetime.date]], float] = {}
+        self.eur_to_forex_cache: dict[tuple[str, datetime.date | None], float] = {}
         # tickers which can be multiplied by EUR amount to get foreign currency amount, like EURUSD
         self.tickers_eur_first = {"USD": "EURUSD=X"}
         # tickers by which an EUR amount needs to be divided to get to the foreign currency amount, like GBPEUR
         self.tickers_eur_second = {"GBP": "GBPEUR=X"}
 
     def request_factor_eur_to_forex(
-        self, currency: str, date: Optional[datetime.date] = None
-    ) -> Optional[float]:
+        self, currency: str, date: datetime.date | None = None
+    ) -> float | None:
         # accept datetimes too, but cache/query by date only
         if isinstance(date, datetime.datetime):
             date = date.date()
@@ -107,7 +105,7 @@ def parse_money_to_eur(
     raw_value: str,
     i18n_helper: I18nHelper,
     forex_helper: "ForexHelper",
-    date: Optional[datetime.date] = None,
+    date: datetime.date | None = None,
 ) -> float:
     """Parse a PortfolioPerformance monetary string into EUR.
 
@@ -137,7 +135,7 @@ def parse_money_to_eur(
 
 def resolve_isin_for_transaction(
     security_name: str, row_isin: str, name_to_isin: dict[str, str]
-) -> Optional[str]:
+) -> str | None:
     """Determine a transaction's ISIN from the securities file (the authoritative
     source), matched by security name.
 
@@ -158,7 +156,7 @@ def resolve_isin_for_transaction(
             f"'{row_isin}', in der Wertpapier-Datei '{securities_isin}'. Bitte die "
             f"widersprüchlichen Daten korrigieren."
         )
-        exit(1)
+        sys.exit(1)
     return securities_isin
 
 
@@ -229,7 +227,7 @@ def handle_portfolio_transfer_outbound(
                 f"und Transaktionen des Wertpapiers manuell aus der Input-Transaktionsliste "
                 f"entfernen."
             )
-            exit(1)
+            sys.exit(1)
 
         available_shares = account_from[0].unsold_shares
         if needed_shares >= available_shares:
@@ -283,7 +281,7 @@ def remove_shares_fifo(
                 f"und Transaktionen des Wertpapiers manuell aus der Input-Transaktionsliste "
                 f"entfernen."
             )
-            exit(1)
+            sys.exit(1)
 
         available_shares = account[0].unsold_shares
         if num_shares >= available_shares:
@@ -464,7 +462,7 @@ class ETFMetadata:
     name: str
     isin: str
     tfs_percentage: int  # Teilfreistellung in %
-    last_quote_eur: Optional[float] = None  # last quote in EUR, if known
+    last_quote_eur: float | None = None  # last quote in EUR, if known
 
 
 def read_etf_metadata(
@@ -484,8 +482,8 @@ def read_etf_metadata(
     custom_names = i18n_helper.get_custom_csv_names()
     data = pd.read_csv(metadata_file, keep_default_na=False)
 
-    metadata_by_isin: dict[str, ETFMetadata] = dict()
-    name_to_isin: dict[str, str] = dict()
+    metadata_by_isin: dict[str, ETFMetadata] = {}
+    name_to_isin: dict[str, str] = {}
 
     for index, row in data.iterrows():
         security_name = row[custom_names.NAME]
@@ -521,7 +519,7 @@ def read_etf_metadata(
                 f"Wertpapier-Name '{name}' ist in der Wertpapier-Datei nicht eindeutig "
                 f"(mehrere ISINs) - keine Namens-Zuordnung möglich."
             )
-            exit(1)
+            sys.exit(1)
 
     # read quotes
     for _, row in data.iterrows():
@@ -1144,4 +1142,4 @@ def determine_language_from_transactions_file(transactions_file: str) -> I18nHel
             f"Buchungs-Datei {transactions_file} hat unerwartetes Format. Sie muss in Deutsch oder "
             f"Englisch sein."
         )
-        exit(1)
+        sys.exit(1)
