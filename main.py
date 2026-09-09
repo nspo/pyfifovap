@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import argparse
+import logging
 import sys
 from pprint import pformat
 
@@ -12,9 +14,6 @@ from pyfifovap import (
     read_transactions_into_portfolio,
     read_vap,
 )
-
-import argparse
-import logging
 
 
 def setup_logging(verbosity: int):

@@ -1,0 +1,17 @@
+# Niedrigste unterstützte Python-Version; bestimmt, welche Modernisierungen
+# ruff vorschlagen darf (z. B. "X | None" statt "Optional[X]").
+target-version = "py310"
+
+[lint]
+# Standard-Regelset von ruff, nur diese Regeln passen hier nicht:
+ignore = [
+    # Aufrufe auf dem Root-Logger. Die Regel zielt auf Bibliotheken, die fremden
+    # Code nicht zumüllen sollen - hier sind es Kommandozeilenwerkzeuge.
+    "LOG015",
+    # "except Exception" ist an den betroffenen Stellen Absicht: dort darf kein
+    # Fehler durchschlagen, weil sonst die Rückfallebene nicht greift.
+    "BLE001",
+    # Das Werkzeug rechnet mit Kalenderdaten (Handelstage, Steuerjahre).
+    # Zeitzonenbewusste Zeitstempel wären dafür sachlich falsch.
+    "DTZ",
+]
