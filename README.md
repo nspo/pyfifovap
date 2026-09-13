@@ -28,8 +28,7 @@ Nachgang.
 Es erzeugt eine XLSX-Datei, die mit LibreOffice Calc/Excel/Google Sheets geöffnet werden und für weitere Berechnungen
 genutzt werden kann.
 
-Die Berechnung des steuerpflichtigen Gewinns folgt den üblichen Regeln von Kapitalerträgen und kann Vorabpauschalen (
-ggf.) und Teilfreistellungen (ggf.) für alle noch unverkauften Anteile berücksichtigen.
+Die Berechnung des steuerpflichtigen Gewinns folgt den üblichen Regeln von Kapitalerträgen und kann Vorabpauschalen (ggf.) und Teilfreistellungen (ggf.) für alle noch unverkauften Anteile berücksichtigen.
 Für die Berechnung der darauf fälligen Steuer wird angenommen, dass auf den Gewinn Kapitalertragsteuer + Soli +
 Kirchensteuer (ggf.) gezahlt werden muss.
 Falls im persönlichen Fall bspw. ein ausreichend großer Verlusttopf oder freier Sparer-Pauschbetrag vorhanden ist, wäre
@@ -48,7 +47,7 @@ Dort sind alle Chargen berücksichtigt, die noch nicht (vollständig) verkauft o
 *Übersichts-Tab*
 
 Im Folgenden ein Beispiel für ETF-Anteile, für die schon in mehreren Jahren eine Vorabpauschale angefallen ist und
-für die eine Teilfreistellung von 30% gilt:
+für die eine Teilfreistellung von 30 % gilt:
 
 ![](docs/etf_mit_vap1.png)
 
@@ -160,6 +159,51 @@ Die VAP kann natürlich auch selbst
 manuell [berechnet](https://www.finanztip.de/indexfonds-etf/etf-steuern/vorabpauschale/)
 werden, jedoch ist hierbei insbesondere auf eine gute Quelle für den Anteilspreis am Jahresanfang zu achten.
 
+### VAP mit `estimate_vap.py` schätzen
+
+Wenn keine offiziellen Werte der Vorabpauschalen (z.B. aus Broker-Abrechnungen) vorliegen, kann mit
+diesem Tool ein Wert geschätzt werden. Insbesondere für das laufende Jahr kann eine Schätzung
+nützlich sein, denn hierfür kann es prinzipbedingt noch keine Abrechnung geben.
+Folgende Eingangswerte werden hierfür online abgefragt:
+
+| Wert | Bevorzugte Quelle | Alternative Quelle |
+|---|---|---|
+| Kurs Jahresanfang (erster Rücknahmepreis) | Comdirect (Handelsplatz „Fondsges. in EUR") | Yahoo Finance (Börsenpreis) |
+| Kurs Jahresende (letzter Rücknahmepreis) | Comdirect (Handelsplatz „Fondsges. in EUR") | Yahoo Finance (Börsenpreis) |
+| Ausschüttungen | Yahoo Finance (Werte in EUR) | — |
+
+Die Nutzung ist einfach:
+
+```bash
+# alle Wertpapiere der Wertpapier-Datei, deren Name "ETF" enthält
+./estimate_vap.py -w "Wertpapiere_(Standard).csv"
+
+# beliebige ISINs, auch ohne Wertpapier-Datei und ohne sie im Depot zu haben
+./estimate_vap.py --isins IE00BK5BQT80,IE00B3RBWM25 --jahr 2024,2025 -o neue_vap.csv
+```
+
+Die lesbare Ausgabe geht nach stderr, die CSV-Zeilen im Format von `etf_vorabpauschalen.csv`
+nach `-o` (standardmäßig nach stdout), sodass sie direkt angehängt werden können.
+
+#### Qualität der Schätzung
+
+Für Acc-ETFs, bei denen Comdirect-Werte verfügbar sind, ist die Schätzung in vielen Fällen exakt
+(keine Abweichung abgesehen von Rundungs-/Float-Artefakten).
+Das ist aber selbstverständlich nicht garantiert.
+Für Dist-ETFs (mit Ausschüttung < Basisertrag) oder nur mit Yahoo-Finance-Werten sind Schätzungen
+etwas ungenauer, aber üblicherweise immer noch bei weit unter 5 % Abweichung von den vorhandenen
+Referenzwerten.
+
+| Kursquelle | mittlere Abweichung | exakte Treffer |
+|---|---|---|
+| nur Yahoo Finance | 1,281 % | 3 von 11 |
+| Comdirect (+ Yahoo für Ausschüttungen) | 0,365 % | 7 von 11 |
+
+Comdirect ist eine gescrapte, undokumentierte Schnittstelle und wird irgendwann
+nicht mehr funktionieren. Deshalb wird immer zuerst Yahoo abgefragt - von dort kommen ohnehin die
+Ausschüttungen - und Comdirect ersetzt anschließend nur die beiden Kurswerte. Schlägt
+das aus irgendeinem Grund fehl, bleibt es beim Yahoo-Ergebnis.
+
 ### Datei `etf_vorabpauschalen.csv` updaten
 
 Es wird bereits eine Datei mit einigen VAP-Werten zur Verfügung gestellt.
@@ -182,15 +226,19 @@ FR0014010HV4,Amundi Lev 2x MSCI World Daily Acc ETF,30
 IE000716YHJ7,Invesco FTSE All-World Acc ETF,30
 ```
 
-## Wertpapiere in Fremdwährungen
+## Wertpapiere in Fremdwährungen / Offline-Funktionalität
 
 Für Wertpapiere in Fremdwährungen außer USD und GBP ist aktuell noch keine Forex-Kurs-Abfrage implementiert, dies ist
 jedoch durch eine triviale Code-Änderung (1 Zeile) möglich (`ForexHelper`-Klasse).
 
-Der einzige mögliche Kontakt ins Internet bei Nutzung von pyfifovap ist dieser optionale Abruf von Fremdwährungskursen.
+Der einzige mögliche Kontakt ins Internet bei Nutzung von `main.py` ist dieser optionale Abruf von Fremdwährungskursen.
 Falls auch dies vermieden werden soll, kann die Option `--offline` genutzt werden.
-Selbstverständlich wird in keinem Fall eine Information über das Depot ins Internet übertragen (außer, dass ein
+Dabei wird in keinem Fall eine Information über das Depot ins Internet übertragen (außer, dass ein
 Fremdwährungskurs abgefragt wird).
+
+Das getrennte und optional nutzbare `estimate_vap.py` ist davon ausgenommen: es überträgt die ISINs der
+ausgewerteten Fonds an Yahoo Finance und Comdirect, denn Kurse lassen sich nicht abrufen, ohne das Wertpapier zu
+nennen. Stückzahlen oder Depotwerte werden nicht übertragen.
 
 ## Mögliche Stolpersteine
 

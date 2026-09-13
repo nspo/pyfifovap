@@ -2,6 +2,7 @@ import dataclasses
 import datetime
 import itertools
 import logging
+import re
 import sys
 from collections import defaultdict
 from pprint import pformat
@@ -10,9 +11,33 @@ import pandas as pd
 import yfinance
 from sortedcontainers import SortedList
 
-from i18n_helper import I18nHelper
+from pyfifovap.i18n_helper import I18nHelper
+
+# Basiszins published by the Bundesbank for 2 January of each year, used to compute
+# the Basisertrag according to sec. 18 (4) InvStG. Values are announced by the BMF,
+# see https://www.bundesfinanzministerium.de/ -> "Basiszins zur Berechnung der
+# Vorabpauschale". A negative Basiszins means no Vorabpauschale at all for that year.
+BASISZINS_PERCENT_BY_YEAR = {
+    2018: 0.87,
+    2019: 0.52,
+    2020: 0.07,
+    2021: -0.45,
+    2022: -0.05,
+    2023: 2.55,
+    2024: 2.29,
+    2025: 2.53,
+    2026: 3.20,
+}
+
+# the Basisertrag only covers 70% of the notional interest (sec. 18 (1) InvStG)
+BASISERTRAG_FACTOR = 0.7
 
 _warned_messages = set()  # hack to make it possible to log warnings only once
+
+# a listing whose most recent quote is older than this is treated as dead
+RECENT_DATA_MAX_AGE_DAYS = 14
+# how many listings to consider when resolving an ISIN to a ticker
+ISIN_CANDIDATE_LIMIT = 10
 
 
 # a lot of a certain security that can be part of a brokerage account
@@ -99,6 +124,203 @@ class ForexHelper:
         logging.info(f"EUR -> {currency} (Datum: {date_str}): {fx_factor}")
         self.eur_to_forex_cache[cache_key] = fx_factor
         return fx_factor
+
+
+@dataclasses.dataclass
+class ListingHistory:
+    quotes: pd.DataFrame
+    currency: str
+    # first day this listing ever traded, if Yahoo reports it; tells a newly launched
+    # fund apart from one whose early quotes are simply missing
+    first_trade_date: datetime.date | None
+    # comes with the same request, so it costs nothing extra
+    name: str | None = None
+
+
+def parse_first_trade_date(raw: object) -> datetime.date | None:
+    """Yahoo reports the first trade date as a Unix timestamp, but not always."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return datetime.datetime.fromtimestamp(raw, tz=datetime.timezone.utc).date()
+    if isinstance(raw, datetime.datetime):
+        return raw.date()
+    if isinstance(raw, datetime.date):
+        return raw
+    return None
+
+
+class QuoteHelper:
+    """Fetches historical security quotes from Yahoo Finance."""
+
+    def __init__(self):
+        # (ticker, year) -> history, or None if unavailable
+        self.history_cache: dict[tuple[str, int], ListingHistory | None] = {}
+        # ISIN -> (ticker symbol, name), or None if not resolvable
+        self.isin_cache: dict[str, tuple[str, str] | None] = {}
+
+    def _evaluate_listing(self, symbol: str) -> str | None:
+        """Currency of a listing, or None if it has no up-to-date quotes.
+
+        Yahoo also returns delisted venues, so recent quotes act as a liveness check.
+        """
+        try:
+            ticker_obj = yfinance.Ticker(symbol)
+            history = ticker_obj.history(period="1mo", auto_adjust=False)
+            if history.empty:
+                logging.info(f"Notierung {symbol} liefert keine Kursdaten")
+                return None
+            last_date = history.index[-1].date()
+            age_in_days = (datetime.date.today() - last_date).days
+            if age_in_days > RECENT_DATA_MAX_AGE_DAYS:
+                logging.info(
+                    f"Notierung {symbol} hat nur veraltete Kursdaten (letzter Kurs: "
+                    f"{last_date.isoformat()})"
+                )
+                return None
+            currency = (ticker_obj.history_metadata or {}).get("currency") or ""
+            logging.info(
+                f"Notierung {symbol} ({currency}) hat Kurse bis {last_date.isoformat()}"
+            )
+            return currency
+        except Exception as e:
+            logging.info(f"Notierung {symbol} nicht auswertbar: {e}")
+            return None
+
+    def resolve_isin(self, isin: str) -> tuple[str, str] | None:
+        """Pick the most useful Yahoo Finance listing for an ISIN.
+
+        Yahoo's top hit is often a delisted or thinly traded venue, so listings
+        without recent quotes are dropped and EUR ones preferred.
+        """
+        if isin in self.isin_cache:
+            return self.isin_cache[isin]
+
+        logging.info(f"Yahoo-Finance-Suche nach ISIN {isin}...")
+        try:
+            quotes = yfinance.Search(
+                query=isin, max_results=ISIN_CANDIDATE_LIMIT
+            ).quotes
+        except Exception as e:
+            logging.warning(f"Fehler bei Yahoo-Finance-Suche nach ISIN {isin}: {e}")
+            quotes = []
+
+        usable = []
+        for quote in quotes:
+            symbol = quote.get("symbol")
+            if not symbol:
+                continue
+            currency = self._evaluate_listing(symbol)
+            if currency is None:
+                continue
+            name = quote.get("longname") or quote.get("shortname") or symbol
+            usable.append((symbol, name, currency))
+
+        result = None
+        if usable:
+            # stable sort, so Yahoo's own ranking still decides within each group
+            usable.sort(key=lambda candidate: candidate[2] != "EUR")
+            symbol, name, currency = usable[0]
+            if len(usable) > 1:
+                alternatives = ", ".join(
+                    f"{other[0]} ({other[2]})" for other in usable[1:]
+                )
+                logging.warning(
+                    f"Für ISIN {isin} gibt es mehrere Notierungen. Gewählt: {symbol} "
+                    f"({currency}). Alternativen: {alternatives}. Mit "
+                    f"--ticker {isin}={usable[1][0]} lässt sich eine andere erzwingen."
+                )
+            if currency != "EUR":
+                # Yahoo's search by ISIN often does not surface the German listing at
+                # all, so the fallback is a foreign one. Each forex conversion adds
+                # error, which measurably shows up in the resulting Vorabpauschale.
+                logging.warning(
+                    f"Für ISIN {isin} wurde nur die Notierung {symbol} in {currency} "
+                    f"gefunden; die Kurse müssen umgerechnet werden, was die Schätzung "
+                    f"ungenauer macht. Falls eine EUR-Notierung existiert, ist "
+                    f"--ticker {isin}=SYMBOL (z. B. an der XETRA) genauer."
+                )
+            logging.info(f"ISIN {isin} entspricht Ticker {symbol} ({name})")
+            result = (symbol, name)
+        else:
+            logging.warning(
+                f"Keine Yahoo-Finance-Notierung mit aktuellen Kursdaten für ISIN {isin} "
+                f"gefunden. Mit --ticker {isin}=SYMBOL kann eine vorgegeben werden."
+            )
+
+        self.isin_cache[isin] = result
+        return result
+
+    def request_year_history(self, ticker: str, year: int) -> ListingHistory | None:
+        """Fetch one calendar year of quotes for `ticker` plus its metadata."""
+        cache_key = (ticker, year)
+        if cache_key in self.history_cache:
+            return self.history_cache[cache_key]
+
+        # start a bit before the year so the first trading day of January is
+        # definitely included; yfinance treats `end` as exclusive, hence the extra day.
+        # For the current year there is no 31.12. yet, so stop at today.
+        start = datetime.date(year, 1, 1) - datetime.timedelta(days=7)
+        end = min(
+            datetime.date(year, 12, 31), datetime.date.today()
+        ) + datetime.timedelta(days=1)
+
+        logging.info(
+            f"Yahoo-Finance-Abfrage für Ticker {ticker} von {start.isoformat()} bis {end.isoformat()}"
+        )
+        result = None
+        try:
+            ticker_obj = yfinance.Ticker(ticker)
+            # auto_adjust=False is essential: the default back-adjusts the closing
+            # prices for dividends, which would distort the year-start quote and
+            # double-count the distributions we subtract separately.
+            history = ticker_obj.history(
+                start=start.isoformat(), end=end.isoformat(), auto_adjust=False
+            )
+            if history.empty:
+                logging.warning(
+                    f"Keine Kursdaten für Ticker {ticker} im Jahr {year} gefunden"
+                )
+            else:
+                # populated as a side effect of the history request, so this costs no extra call
+                metadata = ticker_obj.history_metadata or {}
+                currency = metadata.get("currency")
+                if not currency:
+                    # assuming EUR here would silently mix currencies into the result
+                    logging.warning(
+                        f"Ticker {ticker} meldet keine Währung - übersprungen"
+                    )
+                else:
+                    result = ListingHistory(
+                        quotes=history,
+                        currency=currency,
+                        first_trade_date=parse_first_trade_date(
+                            metadata.get("firstTradeDate")
+                        ),
+                        name=metadata.get("longName"),
+                    )
+        except Exception as e:
+            logging.warning(f"Fehler bei Abfrage von Ticker {ticker} für {year}: {e}")
+
+        self.history_cache[cache_key] = result
+        return result
+
+
+def setup_logging(verbosity: int, quiet_yfinance: bool = False) -> None:
+    """Map -v occurrences to a log level."""
+    if verbosity >= 2:
+        level = logging.DEBUG
+    elif verbosity == 1:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+
+    if quiet_yfinance and verbosity == 0:
+        # probing listings that turn out to be delisted is expected, and yfinance
+        # logs that at ERROR level itself - alarming for a handled case
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 def parse_money_to_eur(
@@ -463,6 +685,8 @@ class ETFMetadata:
     isin: str
     tfs_percentage: int  # Teilfreistellung in %
     last_quote_eur: float | None = None  # last quote in EUR, if known
+    # listed in etf_metadaten.csv, i.e. the user declared it a fund
+    declared_as_fund: bool = False
 
 
 def read_etf_metadata(
@@ -495,7 +719,10 @@ def read_etf_metadata(
             continue
         security_tfs = int(row[custom_names.PROZENT_TEILFREISTELLUNG])
         metadata_by_isin[security_isin] = ETFMetadata(
-            name=security_name, isin=security_isin, tfs_percentage=security_tfs
+            name=security_name,
+            isin=security_isin,
+            tfs_percentage=security_tfs,
+            declared_as_fund=True,
         )
 
     data = pd.read_csv(
@@ -603,9 +830,97 @@ def read_vap(
             continue
         year = int(row[custom_names.JAHR_DES_WERTZUWACHES])
         vap_vor_tfs = float(row[custom_names.VAP_VOR_TFS_PRO_ANTEIL])
+        if year in vap_by_isin_and_year[security_isin]:
+            # silently keeping the last row would let an appended estimate replace a
+            # value taken from the broker statement
+            logging.error(
+                f"VAP-Datei enthält {security_isin} für {year} doppelt: "
+                f"{vap_by_isin_and_year[security_isin][year]} und {vap_vor_tfs}. "
+                f"Bitte den zutreffenden Eintrag behalten."
+            )
+            sys.exit(1)
         vap_by_isin_and_year[security_isin][year] = vap_vor_tfs
 
     return vap_by_isin_and_year
+
+
+def looks_like_fund_name(name: str) -> bool:
+    """Whether a security name mentions "ETF" as a word.
+
+    A plain substring search would also match names like "Netflix", and telling
+    someone to enter a Vorabpauschale for a share would be plainly wrong.
+    """
+    return re.search(r"\betf\b", name, re.IGNORECASE) is not None
+
+
+def warn_about_missing_vap_entries(
+    portfolio: defaultdict[str, defaultdict[str, SortedList]],
+    metadata_by_isin: dict[str, ETFMetadata],
+    vap_by_isin_and_year: defaultdict[str, defaultdict[int, float]],
+) -> None:
+    """Point out fund years that are silently treated as having no Vorabpauschale.
+
+    A missing entry is indistinguishable from a deliberate zero, so an oversight
+    would quietly understate the tax. Only still-held lots can be checked; lots
+    sold earlier are no longer part of the portfolio.
+    """
+    # years before the reform and those with a negative Basiszins carry no VAP at
+    # all, so a missing entry there is correct rather than an omission
+    last_assessed_year = datetime.date.today().year - 1
+    relevant_years = {
+        year
+        for year, basiszins in BASISZINS_PERCENT_BY_YEAR.items()
+        if basiszins > 0 and year <= last_assessed_year
+    }
+
+    earliest_year_by_isin: dict[str, int] = {}
+    name_by_isin: dict[str, str] = {}
+    for broker in portfolio:
+        for isin, lots in portfolio[broker].items():
+            for lot in lots:
+                if lot.unsold_shares <= 0:
+                    continue
+                year = lot.purchased_date.year
+                earliest_year_by_isin[isin] = min(
+                    earliest_year_by_isin.get(isin, year), year
+                )
+                name_by_isin[isin] = lot.security_name
+
+    missing: list[tuple[str, str, list[int]]] = []
+    for isin, first_year in sorted(earliest_year_by_isin.items()):
+        name = name_by_isin[isin]
+        metadata = metadata_by_isin.get(isin)
+        looks_like_fund = (
+            looks_like_fund_name(name)
+            or isin in vap_by_isin_and_year
+            or (metadata is not None and metadata.declared_as_fund)
+        )
+        if not looks_like_fund:
+            continue
+        years = sorted(
+            year
+            for year in relevant_years
+            if year >= first_year and year not in vap_by_isin_and_year.get(isin, {})
+        )
+        if years:
+            missing.append((name, isin, years))
+
+    if not missing:
+        return
+
+    # one command per fund: a combined call would compute every fund for every year
+    # and thus append entries that already exist
+    blocks = []
+    for name, isin, years in missing:
+        years_text = ", ".join(str(year) for year in years)
+        blocks.append(
+            f"  {name} ({years_text}):\n"
+            f"    ./estimate_vap.py --isins {isin} --jahr {','.join(map(str, years))}"
+        )
+    logging.warning(
+        "Für folgende Fonds fehlen VAP-Einträge; diese Jahre wurden mit 0 EUR "
+        "gerechnet. Bitte nachtragen oder schätzen lassen:\n\n" + "\n\n".join(blocks)
+    )
 
 
 # returns "VAP vor TFS pro Anteil" for each year as list, if any
@@ -1130,16 +1445,36 @@ def print_portfolio_summary(
             logging.info(f"{name} ({isin}): {num_shares} Anteile noch verfügbar")
 
 
-def determine_language_from_transactions_file(transactions_file: str) -> I18nHelper:
-    with open(transactions_file, "r") as f:
+def _determine_language_from_header(
+    csv_file: str, german_marker: str, english_marker: str, file_description: str
+) -> I18nHelper:
+    """Pick the language from a column name that only exists in one of the exports."""
+    with open(csv_file, "r") as f:
         first_line = f.readline()
-    if "Datum" in first_line:
+    if german_marker in first_line:
         return I18nHelper(is_german=True)
-    elif "Date" in first_line:
+    elif english_marker in first_line:
         return I18nHelper(is_german=False)
     else:
         logging.error(
-            f"Buchungs-Datei {transactions_file} hat unerwartetes Format. Sie muss in Deutsch oder "
+            f"{file_description} {csv_file} hat unerwartetes Format. Sie muss in Deutsch oder "
             f"Englisch sein."
         )
         sys.exit(1)
+
+
+def determine_language_from_transactions_file(transactions_file: str) -> I18nHelper:
+    return _determine_language_from_header(
+        transactions_file, "Datum", "Date", "Buchungs-Datei"
+    )
+
+
+def determine_language_from_securities_file(securities_file: str) -> I18nHelper:
+    """Determine the language when no transactions file is available.
+
+    The securities export has no date column, so the quote column ("Letzter" /
+    "Latest") is used as the marker instead.
+    """
+    return _determine_language_from_header(
+        securities_file, "Letzter", "Latest", "Wertpapier-Datei"
+    )
