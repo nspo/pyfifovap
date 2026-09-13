@@ -18,6 +18,7 @@ class PortfolioPerformanceExportNames:
     NAME: str
     LATEST_QUOTE: str
     ISIN: str = "ISIN"
+    SYMBOL: str = "Symbol"  # same header in German and English exports
 
 
 @dataclasses.dataclass

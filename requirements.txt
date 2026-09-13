@@ -3,6 +3,7 @@ sortedcontainers
 openpyxl
 xlsxwriter
 yfinance
+requests
 pytest
 # gepinnt, weil ruff mit jeder Minor-Version neue Regeln in sein Standard-Set
 # aufnimmt und die CI sonst ohne Codeänderung bricht
