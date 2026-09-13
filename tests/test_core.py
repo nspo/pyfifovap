@@ -9,8 +9,7 @@ import pytest
 import yfinance
 from sortedcontainers import SortedList
 
-from i18n_helper import I18nHelper
-from pyfifovap import (
+from pyfifovap.core import (
     ETFMetadata,
     ForexHelper,
     SecurityLot,
@@ -18,9 +17,12 @@ from pyfifovap import (
     determine_tax_factor_and_header,
     determine_taxable_gains_to_consider,
     parse_money_to_eur,
+    read_vap,
     resolve_isin_for_transaction,
     warn_about_isin_name_collisions,
+    warn_about_missing_vap_entries,
 )
+from pyfifovap.i18n_helper import I18nHelper
 
 
 def test_verlustverrechnung():
@@ -280,3 +282,81 @@ def test_tax_factor():
     factor, header = determine_tax_factor_and_header(ArgsMock(kirche_9=True))
     assert factor == 0.25 * (1 + 0.055 + 0.09)
     assert header == "KESt + Soli + 9% Kirche"
+
+
+def make_lot(isin: str, name: str, year: int) -> SecurityLot:
+    return SecurityLot(
+        security_isin=isin,
+        security_name=name,
+        purchased_date=datetime.datetime(year, 5, 1),
+        purchased_index=0,
+        purchased_shares=10.0,
+        purchased_value=1000.0,
+        unsold_shares=10.0,
+    )
+
+
+def missing_vap_years(lots, vap=None, metadata=None):
+    """Which (ISIN, years) the hint would report for the given portfolio."""
+    portfolio = defaultdict(lambda: defaultdict(SortedList))
+    for lot in lots:
+        portfolio["DKB"][lot.security_isin].add(lot)
+    vap_by_isin_and_year = defaultdict(lambda: defaultdict(float))
+    for isin, years in (vap or {}).items():
+        for year, value in years.items():
+            vap_by_isin_and_year[isin][year] = value
+
+    reported = {}
+    original = logging.warning
+    logging.warning = lambda message, *a: reported.setdefault("text", message)
+    try:
+        warn_about_missing_vap_entries(portfolio, metadata or {}, vap_by_isin_and_year)
+    finally:
+        logging.warning = original
+    return reported.get("text", "")
+
+
+def test_hinweis_auf_fehlende_vap_eintraege():
+    current_year = datetime.date.today().year
+
+    # a fund with a gap is reported, but only for years that carry a Vorabpauschale:
+    # the current year is not assessed yet, 2021 and 2022 had a negative Basiszins
+    text = missing_vap_years([make_lot("IE00BK5BQT80", "Vanguard All-World ETF", 2021)])
+    assert "IE00BK5BQT80" in text
+    assert "2023,2024" in text
+    assert "2021" not in text and "2022" not in text
+    assert str(current_year) not in text
+
+    # "Netflix" contains "etf" - a substring check would ask for a Vorabpauschale on
+    # a share, which would be plainly wrong
+    assert missing_vap_years([make_lot("US64110L1061", "Netflix Inc.", 2023)]) == ""
+
+    # a fund without "ETF" in its name is recognised via etf_metadaten.csv ...
+    lot = make_lot("LU0290358497", "Xtrackers Overnight", 2023)
+    metadata = {
+        "LU0290358497": ETFMetadata(
+            "Xtrackers Overnight", "LU0290358497", 0, declared_as_fund=True
+        )
+    }
+    assert "LU0290358497" in missing_vap_years([lot], metadata=metadata)
+
+    # ... or because an entry for another year already exists
+    assert "2024" in missing_vap_years([lot], vap={"LU0290358497": {2023: 1.0}})
+
+    # nothing to report once every relevant year is covered
+    covered = {year: 0.0 for year in range(2023, current_year)}
+    assert missing_vap_years([lot], vap={"LU0290358497": covered}) == ""
+
+
+def test_read_vap_bricht_bei_doppeltem_eintrag_ab(tmp_path):
+    # an appended estimate must not silently replace a value from a broker statement
+    doppelt = tmp_path / "vap.csv"
+    doppelt.write_text(
+        "ISIN,Name,Jahr des Wertzuwachses,Vorabpauschale vor TFS pro Anteil\n"
+        "IE00BK5BQT80,Vanguard,2025,2.382607760\n"
+        "IE00BK5BQT80,Vanguard,2025,2.399350724\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SystemExit):
+        read_vap(str(doppelt), I18nHelper(is_german=True))

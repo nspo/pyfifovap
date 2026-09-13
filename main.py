@@ -5,7 +5,7 @@ import logging
 import sys
 from pprint import pformat
 
-from pyfifovap import (
+from pyfifovap.core import (
     ForexHelper,
     build_results_file,
     determine_language_from_transactions_file,
@@ -13,18 +13,9 @@ from pyfifovap import (
     read_etf_metadata,
     read_transactions_into_portfolio,
     read_vap,
+    setup_logging,
+    warn_about_missing_vap_entries,
 )
-
-
-def setup_logging(verbosity: int):
-    if verbosity >= 2:
-        level = logging.DEBUG
-    elif verbosity == 1:
-        level = logging.INFO
-    else:
-        level = logging.WARNING
-
-    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
 
 
 def parse_args():
@@ -149,6 +140,7 @@ def main():
     logging.info(f"Lese VAP-Daten aus {args.vap}...")
     vap_by_isin_and_year = read_vap(args.vap, i18n_helper)
     logging.info(pformat(vap_by_isin_and_year))
+    warn_about_missing_vap_entries(portfolio, metadata_by_isin, vap_by_isin_and_year)
 
     print(f"Generiere Ergebnis-XLSX-Datei {args.output}...")
     build_results_file(

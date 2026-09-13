@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyfifovap import (
+from pyfifovap.core import (
     ForexHelper,
     collect_overview_summary,
     collect_vap_summary,
